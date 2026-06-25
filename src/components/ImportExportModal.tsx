@@ -71,6 +71,7 @@ export default function ImportExportModal({
             author: q.author || "Unknown",
             categoryId: q.categoryId,
             createdAt: q.createdAt || Date.now(),
+            rating: q.rating === "up" || q.rating === "down" ? q.rating : null,
           }));
         }
 
@@ -116,6 +117,7 @@ export default function ImportExportModal({
               author: item.author || "Unknown",
               categoryId: targetCatId,
               createdAt: item.createdAt || Date.now(),
+              rating: item.rating === "up" || item.rating === "down" ? item.rating : null,
             });
           }
         });
@@ -364,7 +366,8 @@ export default function ImportExportModal({
   {
     "text": "The only limit to our realization of tomorrow is our doubts of today.",
     "author": "Franklin D. Roosevelt",
-    "category": "Inspiration"
+    "category": "Inspiration",
+    "rating": "up"
   }
 ]`}
               </pre>
@@ -375,7 +378,7 @@ export default function ImportExportModal({
     { "id": "cat-1", "name": "Inspiration", "isShufflable": true }
   ],
   "quotes": [
-    { "id": "q-1", "text": "Quote here", "author": "Author", "categoryId": "cat-1" }
+    { "id": "q-1", "text": "Quote here", "author": "Author", "categoryId": "cat-1", "rating": "up" }
   ]
 }`}
               </pre>
