@@ -1,0 +1,6 @@
+{
+  "name": "Quote Shuffle",
+  "description": "An elegant personal quote catalog and shuffle player with category management and interactive play/pause controls.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
