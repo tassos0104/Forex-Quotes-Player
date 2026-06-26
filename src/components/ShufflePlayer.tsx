@@ -195,6 +195,7 @@ export default function ShufflePlayer({
   const [recentColors, setRecentColors] = useState<string[]>(["#ffffff", "#0c0a09", "#fafaf9", "#111827", "#1e1b4b", "#064e3b"]);
   const [hexInput, setHexInput] = useState<string>("#ffffff");
   const [isRandomColorsMode, setIsRandomColorsMode] = useState<boolean>(false);
+  const [isControlsVisible, setIsControlsVisible] = useState<boolean>(true);
 
   const getRandomAestheticColor = () => {
     // Helper to convert HSL values to a valid Hex string
@@ -255,6 +256,39 @@ export default function ShufflePlayer({
       }
     };
   }, []);
+
+  // Auto-hide Zen controls and mouse cursor after 3 seconds of idle time
+  useEffect(() => {
+    if (!isZenMode) {
+      setIsControlsVisible(true);
+      return;
+    }
+
+    let timeoutId: any;
+
+    const handleActivity = () => {
+      setIsControlsVisible(true);
+      clearTimeout(timeoutId);
+      timeoutId = setTimeout(() => {
+        // Prevent auto-hiding if dropdowns/pickers are actively open
+        if (!showColorPicker && !showShortcuts) {
+          setIsControlsVisible(false);
+        }
+      }, 3000);
+    };
+
+    // Initialize/show on mount or when states change
+    handleActivity();
+
+    window.addEventListener("mousemove", handleActivity);
+    window.addEventListener("touchstart", handleActivity);
+
+    return () => {
+      window.removeEventListener("mousemove", handleActivity);
+      window.removeEventListener("touchstart", handleActivity);
+      clearTimeout(timeoutId);
+    };
+  }, [isZenMode, showColorPicker, showShortcuts]);
 
   const handleContextMenu = (e: React.MouseEvent<HTMLTextAreaElement>) => {
     const textarea = e.currentTarget;
@@ -1430,25 +1464,35 @@ export default function ShufflePlayer({
             exit={{ opacity: 0 }}
             transition={{ duration: 0.4 }}
             style={{ backgroundColor: zenBgColor }}
-            className={`fixed inset-0 z-[120] flex flex-col justify-between p-6 md:p-14 select-none touch-manipulation ${
+            className={`fixed inset-0 z-[120] flex flex-col justify-between p-6 md:p-14 select-none touch-manipulation transition-all duration-300 ${
               isDarkText ? "text-stone-900 animate-fade-in" : "text-stone-100 animate-fade-in"
-            }`}
+            } ${!isControlsVisible ? "cursor-none" : ""}`}
           >
             {/* Absolute Left & Right Navigation Click Hotspots (Behind controls, covering rest of screen) */}
             <div className="absolute inset-0 z-0 flex pointer-events-auto">
               <div
-                className="w-1/2 h-full cursor-w-resize"
+                className={`w-1/2 h-full ${!isControlsVisible ? "cursor-none" : "cursor-w-resize"}`}
                 onClick={() => handleZoneClick("prev")}
-                title="Previous Slide (Left Click)"
+                title={isControlsVisible ? "Previous Slide (Left Click)" : undefined}
               />
               <div
-                className="w-1/2 h-full cursor-e-resize"
+                className={`w-1/2 h-full ${!isControlsVisible ? "cursor-none" : "cursor-e-resize"}`}
                 onClick={() => handleZoneClick("next")}
-                title="Next Slide (Right Click)"
+                title={isControlsVisible ? "Next Slide (Right Click)" : undefined}
               />
             </div>
             {/* Top Bar Controls */}
-            <div id="zen-top-bar" className="relative flex items-center justify-between z-50" onClick={(e) => e.stopPropagation()}>
+            <motion.div
+              id="zen-top-bar"
+              animate={{
+                y: isControlsVisible ? 0 : -60,
+                opacity: isControlsVisible ? 1 : 0,
+                pointerEvents: isControlsVisible ? "auto" : "none"
+              }}
+              transition={{ duration: 0.35, ease: "easeInOut" }}
+              className="relative flex items-center justify-between z-50"
+              onClick={(e) => e.stopPropagation()}
+            >
               <div className="flex items-center gap-2 flex-wrap">
                 <span
                   className={`text-xs font-bold uppercase tracking-widest px-3 py-1.5 rounded-full ${
@@ -1844,7 +1888,7 @@ export default function ShufflePlayer({
                   <span>Exit Zen Mode</span>
                 </button>
               </div>
-            </div>
+            </motion.div>
 
             {/* Fullscreen Quote Box - Beautiful giant serif statement */}
             <div className="flex-1 flex flex-col justify-center max-w-5xl mx-auto w-full relative pointer-events-none">
@@ -1885,7 +1929,17 @@ export default function ShufflePlayer({
             </div>
 
             {/* Bottom Playbar Controls */}
-            <div id="zen-bottom-bar" className="flex flex-col md:flex-row items-center justify-between gap-6 z-10 border-t pt-6 border-stone-800/20" onClick={(e) => e.stopPropagation()}>
+            <motion.div
+              id="zen-bottom-bar"
+              animate={{
+                y: isControlsVisible ? 0 : 60,
+                opacity: isControlsVisible ? 1 : 0,
+                pointerEvents: isControlsVisible ? "auto" : "none"
+              }}
+              transition={{ duration: 0.35, ease: "easeInOut" }}
+              className="flex flex-col md:flex-row items-center justify-between gap-6 z-10 border-t pt-6 border-stone-800/20"
+              onClick={(e) => e.stopPropagation()}
+            >
               {/* Autoplay status text */}
               <div className="text-xs font-mono flex items-center gap-2">
                 <div className={`w-2.5 h-2.5 rounded-full ${isPlaying ? "bg-emerald-500 animate-ping" : isDarkText ? "bg-stone-400" : "bg-stone-600"}`} />
@@ -1985,11 +2039,15 @@ export default function ShufflePlayer({
                   ))}
                 </div>
               </div>
-            </div>
+            </motion.div>
 
             {/* Absolute loading bar for autoplay */}
             {isPlaying && (
-              <div className="absolute bottom-0 left-0 h-1.5 w-full bg-stone-800/10">
+              <motion.div
+                animate={{ opacity: isControlsVisible ? 1 : 0 }}
+                transition={{ duration: 0.35 }}
+                className="absolute bottom-0 left-0 h-1.5 w-full bg-stone-800/10"
+              >
                 <motion.div
                   key={`${activeQuote.id}-${speed}-${isPlaying}-${timerTrigger}`}
                   initial={{ width: "0%" }}
@@ -1997,7 +2055,7 @@ export default function ShufflePlayer({
                   transition={{ duration: speed, ease: "linear" }}
                   className="h-full bg-amber-600"
                 />
-              </div>
+              </motion.div>
             )}
           </motion.div>
         )}
