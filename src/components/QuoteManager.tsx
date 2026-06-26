@@ -76,6 +76,7 @@ export default function QuoteManager({
   const [selectedQuoteIds, setSelectedQuoteIds] = useState<string[]>([]);
   const [lastSelectedId, setLastSelectedId] = useState<string | null>(null);
   const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
+  const [deleteConfirmQuoteId, setDeleteConfirmQuoteId] = useState<string | null>(null);
 
   // Font size level for displaying quotes (1: xs, 2: sm, 3: base, 4: lg, 5: xl, 6: 2xl)
   const [fontSizeLevel, setFontSizeLevel] = useState<number>(3);
@@ -139,7 +140,13 @@ export default function QuoteManager({
   useEffect(() => {
     setSelectedQuoteIds([]);
     setLastSelectedId(null);
+    setDeleteConfirmQuoteId(null);
   }, [category.id]);
+
+  // Keep only selected quotes that still exist in the current category list
+  useEffect(() => {
+    setSelectedQuoteIds((prev) => prev.filter((id) => quotes.some((q) => q.id === id)));
+  }, [quotes]);
 
   // Reset bulk delete confirmation if selection is cleared
   useEffect(() => {
@@ -213,6 +220,19 @@ export default function QuoteManager({
   const handleDragStart = (e: React.DragEvent, id: string) => {
     setDraggedQuoteId(id);
     e.dataTransfer.effectAllowed = "move";
+    
+    // Determine the list of quotes being dragged.
+    // If the dragged quote is part of the multi-selection, we drag the entire selection.
+    // Otherwise, we drag just this single quote.
+    const draggedIds = selectedQuoteIds.includes(id) 
+      ? selectedQuoteIds 
+      : [id];
+      
+    e.dataTransfer.setData("application/json", JSON.stringify({
+      type: "quotes",
+      quoteIds: draggedIds,
+      sourceCategoryId: category.id
+    }));
     e.dataTransfer.setData("text/plain", id);
   };
 
@@ -1417,97 +1437,128 @@ export default function QuoteManager({
 
                           {/* Right action buttons: Full row by themselves */}
                           <div className="flex items-center gap-1 shrink-0">
-                            {/* Play/Preview button */}
-                            <button
-                              id={`preview-quote-btn-${q.id}`}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                if (onPlayQuote) {
-                                  onPlayQuote(q.id);
-                                }
-                              }}
-                              className="p-1.5 text-amber-600 hover:text-amber-700 hover:bg-amber-50 rounded-lg border border-amber-200/50 transition-all cursor-pointer flex items-center justify-center"
-                              title="Play Quote in Zen Mode"
-                            >
-                              <Play className="w-3.5 h-3.5 fill-current" />
-                            </button>
+                            {deleteConfirmQuoteId === q.id ? (
+                              <div className="flex items-center gap-1.5 bg-red-50 border border-red-200 p-1 rounded-lg shrink-0 animate-fade-in shadow-3xs">
+                                <span className="text-[10px] font-bold text-red-700 uppercase font-sans px-1.5">
+                                  Delete Quote?
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onDeleteQuote(q.id);
+                                    setDeleteConfirmQuoteId(null);
+                                  }}
+                                  className="px-2.5 py-1 bg-red-600 hover:bg-red-700 text-white text-[10px] font-bold rounded-md cursor-pointer transition-colors"
+                                >
+                                  Delete
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setDeleteConfirmQuoteId(null);
+                                  }}
+                                  className="px-2.5 py-1 bg-white border border-stone-250 text-stone-700 text-[10px] font-semibold rounded-md cursor-pointer hover:bg-stone-50 transition-colors"
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            ) : (
+                              <>
+                                {/* Play/Preview button */}
+                                <button
+                                  id={`preview-quote-btn-${q.id}`}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (onPlayQuote) {
+                                      onPlayQuote(q.id);
+                                    }
+                                  }}
+                                  className="p-1.5 text-amber-600 hover:text-amber-700 hover:bg-amber-50 rounded-lg border border-amber-200/50 transition-all cursor-pointer flex items-center justify-center"
+                                  title="Play Quote in Zen Mode"
+                                >
+                                  <Play className="w-3.5 h-3.5 fill-current" />
+                                </button>
 
-                            {/* Edit button */}
-                            <button
-                              id={`edit-quote-btn-${q.id}`}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleStartEdit(q);
-                              }}
-                              className="p-1.5 text-stone-400 hover:text-amber-700 hover:bg-stone-100 rounded-lg border border-transparent transition-all cursor-pointer"
-                              title="Edit Quote"
-                            >
-                              <Pencil className="w-3.5 h-3.5" />
-                            </button>
+                                {/* Edit button */}
+                                <button
+                                  id={`edit-quote-btn-${q.id}`}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleStartEdit(q);
+                                  }}
+                                  className="p-1.5 text-stone-400 hover:text-amber-700 hover:bg-stone-100 rounded-lg border border-transparent transition-all cursor-pointer"
+                                  title="Edit Quote"
+                                >
+                                  <Pencil className="w-3.5 h-3.5" />
+                                </button>
 
-                            {/* Visibility status Quick Toggle */}
-                            <button
-                              id={`toggle-active-${q.id}`}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleToggleActive(q.id, q.isActive !== false);
-                              }}
-                              className={`p-1.5 rounded-lg border transition-all cursor-pointer ${
-                                q.isActive !== false
-                                  ? "text-stone-400 hover:text-stone-750 hover:bg-stone-100 border-transparent"
-                                  : "text-amber-700 bg-amber-50 border-amber-300"
-                              }`}
-                              title={q.isActive !== false ? "Hide Quote from slideshow" : "Show Quote in slideshow"}
-                            >
-                              {q.isActive !== false ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
-                            </button>
+                                {/* Visibility status Quick Toggle */}
+                                <button
+                                  id={`toggle-active-${q.id}`}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleToggleActive(q.id, q.isActive !== false);
+                                  }}
+                                  className={`p-1.5 rounded-lg border transition-all cursor-pointer ${
+                                    q.isActive !== false
+                                      ? "text-stone-400 hover:text-stone-750 hover:bg-stone-100 border-transparent"
+                                      : "text-amber-700 bg-amber-50 border-amber-300"
+                                  }`}
+                                  title={q.isActive !== false ? "Hide Quote from slideshow" : "Show Quote in slideshow"}
+                                >
+                                  {q.isActive !== false ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
+                                </button>
 
-                            {/* Thumbs Up button */}
-                            <button
-                              id={`rate-up-quote-${q.id}`}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onRateQuote(q.id, q.rating === 'up' ? null : 'up');
-                              }}
-                              className={`p-1.5 rounded-lg border transition-all cursor-pointer ${
-                                q.rating === 'up'
-                                  ? "text-emerald-700 bg-emerald-50 border-emerald-300"
-                                  : "text-stone-400 hover:text-stone-700 hover:bg-stone-100 border-transparent"
-                              }`}
-                              title="Thumbs Up"
-                            >
-                              <ThumbsUp className={`w-3.5 h-3.5 ${q.rating === 'up' ? "fill-current" : ""}`} />
-                            </button>
+                                {/* Thumbs Up button */}
+                                <button
+                                  id={`rate-up-quote-${q.id}`}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onRateQuote(q.id, q.rating === 'up' ? null : 'up');
+                                  }}
+                                  className={`p-1.5 rounded-lg border transition-all cursor-pointer ${
+                                    q.rating === 'up'
+                                      ? "text-emerald-700 bg-emerald-50 border-emerald-300"
+                                      : "text-stone-400 hover:text-stone-700 hover:bg-stone-100 border-transparent"
+                                  }`}
+                                  title="Thumbs Up"
+                                >
+                                  <ThumbsUp className={`w-3.5 h-3.5 ${q.rating === 'up' ? "fill-current" : ""}`} />
+                                </button>
 
-                            {/* Thumbs Down button */}
-                            <button
-                              id={`rate-down-quote-${q.id}`}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onRateQuote(q.id, q.rating === 'down' ? null : 'down');
-                              }}
-                              className={`p-1.5 rounded-lg border transition-all cursor-pointer ${
-                                q.rating === 'down'
-                                  ? "text-red-700 bg-red-50 border-red-300"
-                                  : "text-stone-400 hover:text-stone-700 hover:bg-stone-100 border-transparent"
-                              }`}
-                              title="Thumbs Down"
-                            >
-                              <ThumbsDown className={`w-3.5 h-3.5 ${q.rating === 'down' ? "fill-current" : ""}`} />
-                            </button>
+                                {/* Thumbs Down button */}
+                                <button
+                                  id={`rate-down-quote-${q.id}`}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onRateQuote(q.id, q.rating === 'down' ? null : 'down');
+                                  }}
+                                  className={`p-1.5 rounded-lg border transition-all cursor-pointer ${
+                                    q.rating === 'down'
+                                      ? "text-red-700 bg-red-50 border-red-300"
+                                      : "text-stone-400 hover:text-stone-700 hover:bg-stone-100 border-transparent"
+                                  }`}
+                                  title="Thumbs Down"
+                                >
+                                  <ThumbsDown className={`w-3.5 h-3.5 ${q.rating === 'down' ? "fill-current" : ""}`} />
+                                </button>
 
-                            {/* Delete button */}
-                            <button
-                              id={`delete-quote-${q.id}`}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onDeleteQuote(q.id);
-                              }}
-                              className="p-1.5 text-stone-400 hover:text-red-600 hover:bg-stone-100 rounded-lg border border-transparent transition-all cursor-pointer"
-                              title="Delete Quote"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
+                                {/* Delete button */}
+                                <button
+                                  id={`delete-quote-${q.id}`}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setDeleteConfirmQuoteId(q.id);
+                                  }}
+                                  className="p-1.5 text-stone-400 hover:text-red-600 hover:bg-stone-100 rounded-lg border border-transparent transition-all cursor-pointer"
+                                  title="Delete Quote"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </>
+                            )}
                           </div>
                         </div>
 

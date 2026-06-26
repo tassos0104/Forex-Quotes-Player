@@ -17,6 +17,8 @@ interface SidebarProps {
   onToggleAllShuffle: (enable: boolean) => void;
   shuffleFavoritesOnly?: boolean;
   onDisableFavoritesOnly?: () => void;
+  onUpdateCategoryFolder?: (categoryId: string, folderId: string) => void;
+  onMoveQuotes?: (quoteIds: string[], sourceCategoryId: string, targetCategoryId: string) => void;
 }
 
 export default function Sidebar({
@@ -34,6 +36,8 @@ export default function Sidebar({
   onToggleAllShuffle,
   shuffleFavoritesOnly = false,
   onDisableFavoritesOnly,
+  onUpdateCategoryFolder,
+  onMoveQuotes,
 }: SidebarProps) {
   const [newFolderName, setNewFolderName] = useState("");
   const [showAddFolderInput, setShowAddFolderInput] = useState(false);
@@ -51,6 +55,72 @@ export default function Sidebar({
   const [newCatName, setNewCatName] = useState("");
   const [error, setError] = useState("");
   const [categoryToDelete, setCategoryToDelete] = useState<Category | null>(null);
+
+  // Drag and Drop States for Highlights
+  const [quoteDragOverCatId, setQuoteDragOverCatId] = useState<string | null>(null);
+  const [catDragOverFolderId, setCatDragOverFolderId] = useState<string | null>(null);
+
+  // Handlers for Quotes dragged over Categories
+  const handleQuoteDragOverCategory = (e: React.DragEvent, catId: string) => {
+    e.preventDefault();
+    setQuoteDragOverCatId(catId);
+  };
+
+  const handleQuoteDragLeaveCategory = (catId: string) => {
+    setQuoteDragOverCatId((prev) => (prev === catId ? null : prev));
+  };
+
+  const handleQuoteDropOnCategory = (e: React.DragEvent, targetCatId: string) => {
+    e.preventDefault();
+    setQuoteDragOverCatId(null);
+    try {
+      const dataStr = e.dataTransfer.getData("application/json");
+      if (dataStr) {
+        const data = JSON.parse(dataStr);
+        if (data.type === "quotes") {
+          const { quoteIds, sourceCategoryId } = data;
+          if (quoteIds && quoteIds.length > 0 && sourceCategoryId !== targetCatId) {
+            if (onMoveQuotes) {
+              onMoveQuotes(quoteIds, sourceCategoryId, targetCatId);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error("Error dropping quotes on category:", err);
+    }
+  };
+
+  // Handlers for Categories dragged over Folders/Subjects
+  const handleCategoryDragOverFolder = (e: React.DragEvent, folderId: string) => {
+    e.preventDefault();
+    setCatDragOverFolderId(folderId);
+  };
+
+  const handleCategoryDragLeaveFolder = (folderId: string) => {
+    setCatDragOverFolderId((prev) => (prev === folderId ? null : prev));
+  };
+
+  const handleCategoryDropOnFolder = (e: React.DragEvent, targetFolderId: string) => {
+    e.preventDefault();
+    setCatDragOverFolderId(null);
+    try {
+      const dataStr = e.dataTransfer.getData("application/json");
+      if (dataStr) {
+        const data = JSON.parse(dataStr);
+        if (data.type === "category") {
+          const { categoryId, sourceFolderId } = data;
+          if (categoryId && sourceFolderId !== targetFolderId) {
+            if (onUpdateCategoryFolder) {
+              onUpdateCategoryFolder(categoryId, targetFolderId);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error("Error dropping category on folder:", err);
+    }
+  };
 
   const toggleFolder = (folderId: string) => {
     setExpandedFolders((prev) =>
@@ -333,7 +403,17 @@ export default function Sidebar({
                 const isEditing = editingFolderId === folder.id;
 
                 return (
-                  <div key={folder.id} className="border border-stone-200/40 rounded-xl p-1 bg-stone-50/30">
+                  <div
+                    key={folder.id}
+                    onDragOver={(e) => handleCategoryDragOverFolder(e, folder.id)}
+                    onDragLeave={() => handleCategoryDragLeaveFolder(folder.id)}
+                    onDrop={(e) => handleCategoryDropOnFolder(e, folder.id)}
+                    className={`border rounded-xl p-1 transition-all duration-200 ${
+                      catDragOverFolderId === folder.id
+                        ? "bg-amber-50 border-amber-400 ring-2 ring-amber-400/40 shadow-xs scale-[1.01]"
+                        : "border-stone-200/40 bg-stone-50/30"
+                    }`}
+                  >
                     {/* Folder Header Row */}
                     <div className="group/folder flex items-center justify-between p-1.5 rounded-lg hover:bg-stone-100/70 transition-all">
                       <div className="flex items-center gap-1.5 min-w-0 flex-1 cursor-pointer" onClick={() => toggleFolder(folder.id)}>
@@ -441,8 +521,22 @@ export default function Sidebar({
                             <div
                               key={cat.id}
                               id={`cat-row-${cat.id}`}
-                              className={`group flex items-center justify-between p-1.5 rounded-lg transition-all duration-200 ${
-                                isActive
+                              draggable={true}
+                              onDragStart={(e) => {
+                                e.dataTransfer.effectAllowed = "move";
+                                e.dataTransfer.setData("application/json", JSON.stringify({
+                                  type: "category",
+                                  categoryId: cat.id,
+                                  sourceFolderId: folder.id
+                                }));
+                              }}
+                              onDragOver={(e) => handleQuoteDragOverCategory(e, cat.id)}
+                              onDragLeave={() => handleQuoteDragLeaveCategory(cat.id)}
+                              onDrop={(e) => handleQuoteDropOnCategory(e, cat.id)}
+                              className={`group flex items-center justify-between p-1.5 rounded-lg transition-all duration-200 cursor-grab active:cursor-grabbing ${
+                                quoteDragOverCatId === cat.id
+                                  ? "bg-amber-100 border-amber-400 ring-2 ring-amber-400/50 shadow-md scale-[1.02]"
+                                  : isActive
                                   ? "bg-amber-50 border border-amber-200/60 shadow-3xs"
                                   : "hover:bg-stone-100 border border-transparent"
                               }`}
