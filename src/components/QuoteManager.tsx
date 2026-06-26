@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Quote, Category } from "../types";
-import { Plus, Trash2, Calendar, Sparkles, ThumbsUp, ThumbsDown, Pencil, Check, X, Type, Underline, Highlighter, Eraser, Bold, Italic, Play, Eye, GripVertical } from "lucide-react";
+import { Plus, Trash2, Calendar, Sparkles, ThumbsUp, ThumbsDown, Pencil, Check, X, Type, Underline, Highlighter, Eraser, Bold, Italic, Play, Eye, EyeOff, GripVertical } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { renderFormattedText, stripFormatTags } from "../utils/textFormatter";
 
@@ -16,6 +16,7 @@ interface QuoteManagerProps {
   onUpdateCategory: (id: string, name: string) => void;
   onReorderQuotes?: (reorderedQuotes: Quote[]) => void;
   onPlayQuote?: (id: string) => void;
+  onUpdateAllQuotes?: (allQuotes: Quote[]) => void;
 }
 
 export default function QuoteManager({
@@ -30,6 +31,7 @@ export default function QuoteManager({
   onUpdateCategory,
   onReorderQuotes,
   onPlayQuote,
+  onUpdateAllQuotes,
 }: QuoteManagerProps) {
   const [text, setText] = useState("");
   const [author, setAuthor] = useState("");
@@ -69,6 +71,82 @@ export default function QuoteManager({
     selectionEnd: number;
     targetId: string;
   } | null>(null);
+
+  // Multi-selection states
+  const [selectedQuoteIds, setSelectedQuoteIds] = useState<string[]>([]);
+  const [lastSelectedId, setLastSelectedId] = useState<string | null>(null);
+  const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
+
+  // Font size level for displaying quotes (1: xs, 2: sm, 3: base, 4: lg, 5: xl, 6: 2xl)
+  const [fontSizeLevel, setFontSizeLevel] = useState<number>(3);
+
+  const getFontSizeClass = (level: number) => {
+    switch (level) {
+      case 1: return "text-xs md:text-sm";
+      case 2: return "text-sm md:text-base";
+      case 3: return "text-base md:text-lg";
+      case 4: return "text-lg md:text-xl";
+      case 5: return "text-xl md:text-2xl";
+      case 6: return "text-2xl md:text-3xl font-semibold";
+      default: return "text-base md:text-lg";
+    }
+  };
+
+  // Font size level for bulk paste preview (1 to 8)
+  const [bulkFontSizeLevel, setBulkFontSizeLevel] = useState<number>(5);
+
+  const getBulkFontSizeClass = (level: number) => {
+    switch (level) {
+      case 1: return "text-sm md:text-base";
+      case 2: return "text-base md:text-lg";
+      case 3: return "text-lg md:text-xl";
+      case 4: return "text-xl md:text-2xl";
+      case 5: return "text-2xl md:text-3xl";
+      case 6: return "text-3xl md:text-4xl";
+      case 7: return "text-4xl md:text-5xl";
+      case 8: return "text-5xl md:text-6xl font-medium";
+      default: return "text-2xl md:text-3xl";
+    }
+  };
+
+  // Active filter for displaying category quotes ('all', 'hidden', 'thumbs-up', 'thumbs-down')
+  const [quoteFilter, setQuoteFilter] = useState<"all" | "hidden" | "thumbs-up" | "thumbs-down">("all");
+
+  // Active filter for bulk preview ('all', 'unique', 'new')
+  const [bulkPreviewFilter, setBulkPreviewFilter] = useState<"all" | "unique" | "new">("all");
+
+  // Undo support & Toast state
+  const [history, setHistory] = useState<Quote[][]>([]);
+  const [toastMessage, setToastMessage] = useState<{ text: string; actionText?: string; onAction?: () => void } | null>(null);
+
+  // Bulk Paste states
+  const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
+  const [bulkInputText, setBulkInputText] = useState("");
+  const [parsedBulkQuotes, setParsedBulkQuotes] = useState<{ text: string; author: string }[]>([]);
+  const [bulkParseError, setBulkParseError] = useState("");
+
+  // Auto-hide toast after 6 seconds
+  useEffect(() => {
+    if (toastMessage) {
+      const id = setTimeout(() => {
+        setToastMessage(null);
+      }, 6000);
+      return () => clearTimeout(id);
+    }
+  }, [toastMessage]);
+
+  // Clear selected quotes when category changes
+  useEffect(() => {
+    setSelectedQuoteIds([]);
+    setLastSelectedId(null);
+  }, [category.id]);
+
+  // Reset bulk delete confirmation if selection is cleared
+  useEffect(() => {
+    if (selectedQuoteIds.length === 0) {
+      setShowBulkDeleteConfirm(false);
+    }
+  }, [selectedQuoteIds.length]);
 
   // Close context menu on click anywhere
   useEffect(() => {
@@ -381,6 +459,10 @@ export default function QuoteManager({
 
     // Duplicate detection check
     if (realTimeDuplicate) {
+      if (realTimeDuplicate.categoryId === category.id) {
+        setError("This quote already exists in this category and cannot be duplicated here.");
+        return;
+      }
       setDuplicateConfirmQuote({
         text: trimmedText,
         author: trimmedAuthor,
@@ -408,8 +490,382 @@ export default function QuoteManager({
     setDuplicateConfirmQuote(null);
   };
 
+  // Parser and bulk operation handlers
+  const parseBulkInput = (input: string): { text: string; author: string }[] => {
+    const trimmedInput = input.trim();
+    if (!trimmedInput) return [];
+
+    // 1. Try JSON parsing
+    try {
+      const parsed = JSON.parse(trimmedInput);
+      if (Array.isArray(parsed)) {
+        return parsed
+          .filter(item => item && typeof item === "object")
+          .map(item => {
+            const rawText = item.text || item.quote || item.content || "";
+            const rawAuthor = item.author || item.source || "";
+            return {
+              text: String(rawText).trim(),
+              author: String(rawAuthor).trim() || "Unknown"
+            };
+          })
+          .filter(q => q.text.length > 0);
+      } else if (parsed && typeof parsed === "object") {
+        const arrayKey = Object.keys(parsed).find(key => Array.isArray(parsed[key]));
+        if (arrayKey) {
+          return parsed[arrayKey]
+            .filter((item: any) => item && typeof item === "object")
+            .map((item: any) => {
+              const rawText = item.text || item.quote || item.content || "";
+              const rawAuthor = item.author || item.source || "";
+              return {
+                text: String(rawText).trim(),
+                author: String(rawAuthor).trim() || "Unknown"
+              };
+            })
+            .filter((q: any) => q.text.length > 0);
+        }
+      }
+    } catch (e) {
+      // Not valid JSON
+    }
+
+    // 2. Line-by-line parsing
+    const lines = trimmedInput.split(/\r?\n/).map(line => line.trim()).filter(line => line.length > 0);
+    if (lines.length === 0) return [];
+
+    // Auto-detect delimiter
+    const delimiters = ["|", "\t", "~", ";", " - "];
+    const delimiterCounts = delimiters.map(d => ({
+      delimiter: d,
+      count: lines.filter(line => line.includes(d)).length
+    }));
+
+    const bestDelimiter = delimiterCounts.reduce((best, current) => {
+      return current.count > best.count ? current : best;
+    }, { delimiter: "|", count: 0 });
+
+    const chosenDelimiter = bestDelimiter.count > 0 ? bestDelimiter.delimiter : null;
+
+    return lines.map(line => {
+      if (chosenDelimiter) {
+        const parts = line.split(chosenDelimiter);
+        const textPart = parts[0].trim();
+        const authorPart = parts.slice(1).join(chosenDelimiter).trim();
+        
+        let cleanedText = textPart;
+        if (cleanedText.startsWith('"') && cleanedText.endsWith('"') && cleanedText.length > 1) {
+          cleanedText = cleanedText.slice(1, -1);
+        }
+        
+        return {
+          text: cleanedText,
+          author: authorPart || "Unknown"
+        };
+      } else {
+        const csvRegex = /^["'](.*?)["']\s*,\s*["'](.*?)["']$/;
+        const match = line.match(csvRegex);
+        if (match) {
+          return {
+            text: match[1].trim(),
+            author: match[2].trim() || "Unknown"
+          };
+        }
+
+        let cleanedText = line;
+        if (cleanedText.startsWith('"') && cleanedText.endsWith('"') && cleanedText.length > 1) {
+          cleanedText = cleanedText.slice(1, -1);
+        }
+        return {
+          text: cleanedText,
+          author: "Unknown"
+        };
+      }
+    }).filter(q => q.text.length > 0);
+  };
+
+  const handleRunBulkParse = () => {
+    setBulkParseError("");
+    if (!bulkInputText.trim()) {
+      setBulkParseError("Please paste some content first.");
+      return;
+    }
+    const result = parseBulkInput(bulkInputText);
+    if (result.length === 0) {
+      setBulkParseError("No quotes could be parsed. Check your format.");
+    } else {
+      setParsedBulkQuotes(result);
+    }
+  };
+
+  const handleAddBulkToCategory = () => {
+    if (parsedBulkQuotes.length === 0 || !onUpdateAllQuotes) return;
+
+    // Filter duplicates/new based on user choice
+    const uniqueParsed = parsedBulkQuotes.filter(
+      (q) => checkQuoteExistence(q.text).status !== "same_category"
+    );
+    const newParsed = parsedBulkQuotes.filter(
+      (q) => checkQuoteExistence(q.text).status === "new"
+    );
+
+    const targetList = bulkPreviewFilter === "new" ? newParsed : uniqueParsed;
+
+    if (targetList.length === 0) {
+      setToastMessage({
+        text: "No eligible unique quotes to add.",
+      });
+      return;
+    }
+
+    setHistory((prev) => [...prev, allQuotes]);
+
+    const timestampBase = Date.now();
+    const newQuotesList: Quote[] = targetList.map((item, idx) => ({
+      id: `quote-${timestampBase}-${idx}`,
+      text: item.text,
+      author: item.author,
+      categoryId: category.id,
+      createdAt: timestampBase - idx * 1000,
+      isActive: true,
+      rating: null,
+    }));
+
+    onUpdateAllQuotes([...newQuotesList, ...allQuotes]);
+
+    const addedCount = newQuotesList.length;
+    setIsBulkModalOpen(false);
+    setBulkInputText("");
+    setParsedBulkQuotes([]);
+    setBulkPreviewFilter("all");
+
+    setToastMessage({
+      text: `Successfully added ${addedCount} unique quotes!`,
+      actionText: "Undo",
+      onAction: () => {
+        setHistory((prev) => {
+          const prevState = prev[prev.length - 1];
+          if (prevState && onUpdateAllQuotes) {
+            onUpdateAllQuotes(prevState);
+          }
+          return prev.slice(0, -1);
+        });
+      },
+    });
+  };
+
+  // Click & Multiselect logic (Windows Explorer-like Ctrl/Shift)
+  const handleQuoteClick = (e: React.MouseEvent, quoteId: string) => {
+    const target = e.target as HTMLElement;
+    if (
+      target.closest("button") ||
+      target.closest("textarea") ||
+      target.closest("input") ||
+      target.closest("select") ||
+      target.closest("form") ||
+      target.closest("span[title]")
+    ) {
+      return;
+    }
+
+    if (e.ctrlKey || e.metaKey) {
+      setSelectedQuoteIds((prev) => {
+        if (prev.includes(quoteId)) {
+          return prev.filter((id) => id !== quoteId);
+        } else {
+          return [...prev, quoteId];
+        }
+      });
+      setLastSelectedId(quoteId);
+    } else if (e.shiftKey && lastSelectedId) {
+      const idx1 = sortedQuotes.findIndex((q) => q.id === lastSelectedId);
+      const idx2 = sortedQuotes.findIndex((q) => q.id === quoteId);
+      if (idx1 !== -1 && idx2 !== -1) {
+        const startIdx = Math.min(idx1, idx2);
+        const endIdx = Math.max(idx1, idx2);
+        const rangeIds = sortedQuotes.slice(startIdx, endIdx + 1).map((q) => q.id);
+        
+        setSelectedQuoteIds((prev) => {
+          const union = Array.from(new Set([...prev, ...rangeIds]));
+          return union;
+        });
+      }
+      setLastSelectedId(quoteId);
+    } else {
+      setSelectedQuoteIds((prev) => {
+        if (prev.includes(quoteId)) {
+          return prev.filter((id) => id !== quoteId);
+        } else {
+          return [...prev, quoteId];
+        }
+      });
+      setLastSelectedId(quoteId);
+    }
+  };
+
+  // Bulk operations
+  const handleBulkDeactivate = () => {
+    if (selectedQuoteIds.length === 0 || !onUpdateAllQuotes) return;
+    setHistory((prev) => [...prev, allQuotes]);
+
+    const updated = allQuotes.map((q) => {
+      if (selectedQuoteIds.includes(q.id)) {
+        return { ...q, isActive: false };
+      }
+      return q;
+    });
+
+    onUpdateAllQuotes(updated);
+    const count = selectedQuoteIds.length;
+
+    setToastMessage({
+      text: `Deactivated ${count} quotes. Hidden from slideshows.`,
+      actionText: "Undo",
+      onAction: () => {
+        setHistory((prev) => {
+          const prevState = prev[prev.length - 1];
+          if (prevState && onUpdateAllQuotes) {
+            onUpdateAllQuotes(prevState);
+          }
+          return prev.slice(0, -1);
+        });
+      },
+    });
+  };
+
+  const handleBulkActivate = () => {
+    if (selectedQuoteIds.length === 0 || !onUpdateAllQuotes) return;
+    setHistory((prev) => [...prev, allQuotes]);
+
+    const updated = allQuotes.map((q) => {
+      if (selectedQuoteIds.includes(q.id)) {
+        return { ...q, isActive: true };
+      }
+      return q;
+    });
+
+    onUpdateAllQuotes(updated);
+    const count = selectedQuoteIds.length;
+
+    setToastMessage({
+      text: `Activated ${count} quotes.`,
+      actionText: "Undo",
+      onAction: () => {
+        setHistory((prev) => {
+          const prevState = prev[prev.length - 1];
+          if (prevState && onUpdateAllQuotes) {
+            onUpdateAllQuotes(prevState);
+          }
+          return prev.slice(0, -1);
+        });
+      },
+    });
+  };
+
+  const executeBulkDelete = () => {
+    if (selectedQuoteIds.length === 0 || !onUpdateAllQuotes) return;
+    setHistory((prev) => [...prev, allQuotes]);
+
+    const updated = allQuotes.filter((q) => !selectedQuoteIds.includes(q.id));
+    onUpdateAllQuotes(updated);
+    const count = selectedQuoteIds.length;
+    setSelectedQuoteIds([]);
+    setShowBulkDeleteConfirm(false);
+
+    setToastMessage({
+      text: `Deleted ${count} quotes.`,
+      actionText: "Undo",
+      onAction: () => {
+        setHistory((prev) => {
+          const prevState = prev[prev.length - 1];
+          if (prevState && onUpdateAllQuotes) {
+            onUpdateAllQuotes(prevState);
+          }
+          return prev.slice(0, -1);
+        });
+      },
+    });
+  };
+
+  const handleBulkDelete = () => {
+    setShowBulkDeleteConfirm(true);
+  };
+
+  const handleToggleActive = (id: string, currentActive: boolean) => {
+    if (!onUpdateAllQuotes) return;
+    setHistory((prev) => [...prev, allQuotes]);
+
+    const updated = allQuotes.map((q) => {
+      if (q.id === id) {
+        return { ...q, isActive: !currentActive };
+      }
+      return q;
+    });
+    onUpdateAllQuotes(updated);
+
+    setToastMessage({
+      text: currentActive ? "Deactivated quote. Hidden from slideshow." : "Activated quote.",
+      actionText: "Undo",
+      onAction: () => {
+        setHistory((prev) => {
+          const prevState = prev[prev.length - 1];
+          if (prevState && onUpdateAllQuotes) {
+            onUpdateAllQuotes(prevState);
+          }
+          return prev.slice(0, -1);
+        });
+      },
+    });
+  };
+
   // Sort quotes newest first
   const sortedQuotes = [...quotes].sort((a, b) => b.createdAt - a.createdAt);
+
+  // Filter quotes based on active filter
+  const filteredQuotes = sortedQuotes.filter((q) => {
+    if (quoteFilter === "hidden") return q.isActive === false;
+    if (quoteFilter === "thumbs-up") return q.rating === "up";
+    if (quoteFilter === "thumbs-down") return q.rating === "down";
+    return true;
+  });
+
+  // Helper to check if a quote text already exists and where
+  const checkQuoteExistence = (parsedText: string) => {
+    const clean = (str: string) => {
+      return str
+        .toLowerCase()
+        .replace(/["'“”‘’]/g, "") // remove quotes
+        .replace(/[\s\p{P}]/gu, "") // remove all whitespace and punctuation
+        .trim();
+    };
+
+    const parsedClean = clean(parsedText);
+    if (!parsedClean) return { status: "new" as const };
+
+    const match = allQuotes.find((existing) => clean(existing.text) === parsedClean);
+    if (match) {
+      if (match.categoryId === category.id) {
+        return { status: "same_category" as const, matchedQuote: match };
+      } else {
+        const otherCat = categories.find((c) => c.id === match.categoryId);
+        return { status: "other_category" as const, matchedQuote: match, otherCategoryName: otherCat?.name || "Another Category" };
+      }
+    }
+
+    return { status: "new" as const };
+  };
+
+  // Computed bulk subsets
+  const uniqueParsedBulk = parsedBulkQuotes.filter(
+    (q) => checkQuoteExistence(q.text).status !== "same_category"
+  );
+  const newParsedBulk = parsedBulkQuotes.filter(
+    (q) => checkQuoteExistence(q.text).status === "new"
+  );
+  const visibleBulkQuotes =
+    bulkPreviewFilter === "new" ? newParsedBulk :
+    bulkPreviewFilter === "unique" ? uniqueParsedBulk :
+    parsedBulkQuotes;
 
   const formatDate = (timestamp: number) => {
     const d = new Date(timestamp);
@@ -526,10 +982,23 @@ export default function QuoteManager({
                 className="w-full text-sm bg-stone-50 border border-stone-300 rounded-xl px-4 py-3 text-stone-800 placeholder-stone-400 focus:outline-none focus:bg-white focus:border-amber-600 focus:ring-1 focus:ring-amber-600 transition-all resize-none"
               />
               {realTimeDuplicate && (
-                <div id="duplicate-warning" className="text-[11px] leading-snug text-amber-900 bg-amber-50/70 p-2.5 rounded-xl border border-amber-200 mt-1.5 flex items-start gap-1.5 animate-fade-in shadow-3xs">
-                  <span className="shrink-0">⚠️</span>
+                <div
+                  id="duplicate-warning"
+                  className={`text-[11px] leading-snug p-2.5 rounded-xl border mt-1.5 flex items-start gap-1.5 animate-fade-in shadow-3xs ${
+                    realTimeDuplicate.categoryId === category.id
+                      ? "text-red-900 bg-red-50/70 border-red-200"
+                      : "text-amber-900 bg-amber-50/70 border-amber-200"
+                  }`}
+                >
+                  <span className="shrink-0">{realTimeDuplicate.categoryId === category.id ? "❌" : "⚠️"}</span>
                   <span>
-                    This quote already exists in category <strong className="text-stone-850">"{realTimeDuplicateCategoryName}"</strong>.
+                    {realTimeDuplicate.categoryId === category.id ? (
+                      <>This quote already exists in this category and cannot be duplicated here.</>
+                    ) : (
+                      <>
+                        This quote already exists in category <strong className="text-stone-850">"{realTimeDuplicateCategoryName}"</strong>. You can still save it as a duplicate in this category.
+                      </>
+                    )}
                   </span>
                 </div>
               )}
@@ -612,9 +1081,189 @@ export default function QuoteManager({
 
         {/* Right Column: Quotes List */}
         <div className="lg:col-span-7 flex flex-col gap-4">
-          <h3 className="font-serif text-lg font-semibold text-stone-800 flex items-center gap-2">
-            <Sparkles className="w-4 h-4 text-amber-700" /> Quotes in this Category
-          </h3>
+          <div className="flex flex-col gap-3 border-b border-stone-200 pb-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h3 className="font-serif text-lg font-semibold text-stone-800 flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-amber-700" /> Quotes in this Category
+              </h3>
+              
+              <div className="flex items-center gap-2 flex-wrap">
+                {/* Font Size Modifier Controls */}
+                <div className="flex items-center gap-1 border border-stone-200 bg-stone-50/60 px-2 py-0.5 rounded-xl text-stone-600 font-sans text-xs shadow-3xs shrink-0">
+                  <span className="font-semibold text-stone-500 mr-1 select-none text-[11px]">Size:</span>
+                  <button
+                    type="button"
+                    onClick={() => setFontSizeLevel(prev => Math.max(1, prev - 1))}
+                    disabled={fontSizeLevel === 1}
+                    className="w-6 h-6 flex items-center justify-center rounded-lg hover:bg-stone-200/50 disabled:opacity-40 font-bold transition-colors cursor-pointer text-stone-700"
+                    title="Decrease font size"
+                  >
+                    A-
+                  </button>
+                  <span className="w-4 text-center font-bold text-amber-700 select-none text-xs">{fontSizeLevel}</span>
+                  <button
+                    type="button"
+                    onClick={() => setFontSizeLevel(prev => Math.min(6, prev + 1))}
+                    disabled={fontSizeLevel === 6}
+                    className="w-6 h-6 flex items-center justify-center rounded-lg hover:bg-stone-200/50 disabled:opacity-40 font-bold transition-colors cursor-pointer text-stone-700"
+                    title="Increase font size"
+                  >
+                    A+
+                  </button>
+                </div>
+
+                {sortedQuotes.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const filteredIds = filteredQuotes.map(q => q.id);
+                      const allFilteredSelected = filteredIds.length > 0 && filteredIds.every(id => selectedQuoteIds.includes(id));
+                      if (allFilteredSelected) {
+                        setSelectedQuoteIds(prev => prev.filter(id => !filteredIds.includes(id)));
+                      } else {
+                        setSelectedQuoteIds(prev => [...new Set([...prev, ...filteredIds])]);
+                      }
+                    }}
+                    className="px-2.5 py-1 text-xs border border-stone-250 bg-white hover:bg-stone-50 text-stone-600 rounded-lg transition-colors cursor-pointer font-sans font-semibold shrink-0"
+                  >
+                    {filteredQuotes.length > 0 && filteredQuotes.every(q => selectedQuoteIds.includes(q.id))
+                      ? (quoteFilter === "all" ? "Deselect All" : "Deselect Filtered")
+                      : (quoteFilter === "all" ? "Select All" : "Select Filtered")}
+                  </button>
+                )}
+                
+                <button
+                  type="button"
+                  onClick={() => setIsBulkModalOpen(true)}
+                  className="flex items-center gap-1.5 bg-amber-600 hover:bg-amber-700 text-white font-sans text-xs font-bold px-3 py-1.5 rounded-lg shadow-2xs transition-colors cursor-pointer shrink-0"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Bulk Paste Quotes</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Quick Filters Row */}
+            <div className="flex items-center gap-1.5 flex-wrap pt-1 border-t border-stone-100">
+              <button
+                type="button"
+                onClick={() => setQuoteFilter("all")}
+                className={`px-2.5 py-1 text-xs rounded-lg font-sans font-semibold transition-all cursor-pointer ${
+                  quoteFilter === "all"
+                    ? "bg-stone-800 text-white shadow-3xs"
+                    : "text-stone-650 bg-stone-50 hover:bg-stone-100 border border-stone-200/50"
+                }`}
+              >
+                All ({quotes.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setQuoteFilter("thumbs-up")}
+                className={`px-2.5 py-1 text-xs rounded-lg font-sans font-semibold transition-all cursor-pointer flex items-center gap-1 ${
+                  quoteFilter === "thumbs-up"
+                    ? "bg-emerald-700 text-white shadow-3xs"
+                    : "text-stone-650 bg-stone-50 hover:bg-stone-100 border border-stone-200/50"
+                }`}
+              >
+                <ThumbsUp className="w-3 h-3 fill-current" />
+                Thumbs Up ({quotes.filter(q => q.rating === "up").length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setQuoteFilter("thumbs-down")}
+                className={`px-2.5 py-1 text-xs rounded-lg font-sans font-semibold transition-all cursor-pointer flex items-center gap-1 ${
+                  quoteFilter === "thumbs-down"
+                    ? "bg-red-700 text-white shadow-3xs"
+                    : "text-stone-650 bg-stone-50 hover:bg-stone-100 border border-stone-200/50"
+                }`}
+              >
+                <ThumbsDown className="w-3 h-3 fill-current" />
+                Thumbs Down ({quotes.filter(q => q.rating === "down").length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setQuoteFilter("hidden")}
+                className={`px-2.5 py-1 text-xs rounded-lg font-sans font-semibold transition-all cursor-pointer flex items-center gap-1 ${
+                  quoteFilter === "hidden"
+                    ? "bg-amber-700 text-white shadow-3xs"
+                    : "text-stone-650 bg-stone-50 hover:bg-stone-100 border border-stone-200/50"
+                }`}
+              >
+                <EyeOff className="w-3 h-3" />
+                Hidden ({quotes.filter(q => q.isActive === false).length})
+              </button>
+            </div>
+          </div>
+
+          {/* Bulk Selection Actions Bar */}
+          <AnimatePresence>
+            {selectedQuoteIds.length > 0 && (
+              <motion.div
+                initial={{ opacity: 0, height: 0, y: -10 }}
+                animate={{ opacity: 1, height: "auto", y: 0 }}
+                exit={{ opacity: 0, height: 0, y: -10 }}
+                className="flex flex-wrap items-center justify-between gap-3 bg-amber-50 border border-amber-250/60 p-3 rounded-2xl shadow-3xs overflow-hidden w-full"
+              >
+                {showBulkDeleteConfirm ? (
+                  <div className="flex flex-wrap items-center justify-between gap-3 w-full p-0.5">
+                    <span className="text-xs font-bold text-red-750 font-sans flex items-center gap-1.5">
+                      ⚠️ Delete {selectedQuoteIds.length} selected quote{selectedQuoteIds.length > 1 ? "s" : ""}? This cannot be undone.
+                    </span>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={executeBulkDelete}
+                        className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-bold rounded-xl transition-colors cursor-pointer shadow-xs"
+                      >
+                        Yes, Delete
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setShowBulkDeleteConfirm(false)}
+                        className="px-3 py-1.5 bg-white border border-stone-250 hover:bg-stone-50 text-stone-700 text-xs font-semibold rounded-xl transition-colors cursor-pointer shadow-2xs"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <span className="text-xs font-semibold text-stone-800 font-sans">
+                      {selectedQuoteIds.length} of {sortedQuotes.length} selected
+                    </span>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={handleBulkActivate}
+                        className="flex items-center gap-1 px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl transition-colors cursor-pointer shadow-xs"
+                        title="Enable selected quotes in slideshow"
+                      >
+                        <Eye className="w-3 h-3" />
+                        <span>Activate</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleBulkDeactivate}
+                        className="flex items-center gap-1 px-2.5 py-1.5 bg-stone-600 hover:bg-stone-700 text-white text-xs font-bold rounded-xl transition-colors cursor-pointer shadow-xs"
+                        title="Hide selected quotes from slideshow without deleting"
+                      >
+                        <EyeOff className="w-3 h-3" />
+                        <span>Deactivate</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleBulkDelete}
+                        className="flex items-center gap-1 px-2.5 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-bold rounded-xl transition-colors cursor-pointer shadow-xs"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                        <span>Delete</span>
+                      </button>
+                    </div>
+                  </>
+                )}
+              </motion.div>
+            )}
+          </AnimatePresence>
 
           <div
             id="quotes-list-wrapper"
@@ -624,8 +1273,8 @@ export default function QuoteManager({
             className="flex flex-col gap-3 max-h-[500px] overflow-y-auto pr-1"
           >
             <AnimatePresence initial={false}>
-              {sortedQuotes.length > 0 ? (
-                sortedQuotes.map((q) => (
+              {filteredQuotes.length > 0 ? (
+                filteredQuotes.map((q) => (
                   <motion.div
                     key={q.id}
                     initial={{ opacity: 0, y: 15 }}
@@ -633,17 +1282,24 @@ export default function QuoteManager({
                     exit={{ opacity: 0, scale: 0.95 }}
                     transition={{ duration: 0.2 }}
                     id={`quote-row-${q.id}`}
-                    draggable={editingQuoteId !== q.id}
+                    draggable={editingQuoteId !== q.id && quoteFilter === "all"}
                     onDragStart={(e) => handleDragStart(e, q.id)}
                     onDragOver={(e) => handleDragOver(e, q.id)}
                     onDragEnd={handleDragEnd}
                     onDrop={(e) => handleDrop(e, q.id)}
-                    className={`relative group bg-stone-50/60 border rounded-xl p-4 md:p-5 flex items-start justify-between gap-4 transition-all hover:bg-stone-50 hover:border-stone-200 hover:shadow-sm ${
+                    onClick={(e) => handleQuoteClick(e, q.id)}
+                    className={`relative group border rounded-xl p-4 md:p-5 flex flex-col gap-3.5 transition-all select-none ${
+                      selectedQuoteIds.includes(q.id)
+                        ? "border-amber-500 bg-amber-50/20 shadow-xs"
+                        : q.isActive === false
+                        ? "opacity-65 bg-stone-100/40 border-stone-200"
+                        : "bg-stone-50/60 border-stone-200/60 hover:bg-stone-50 hover:border-stone-200 hover:shadow-sm"
+                    } ${
                       draggedQuoteId === q.id
                         ? "opacity-35 border-dashed border-stone-300 bg-stone-100/50"
                         : dragOverQuoteId === q.id
                         ? "border-amber-400 bg-amber-50/30 scale-[1.01]"
-                        : "border-stone-200/60"
+                        : ""
                     }`}
                   >
                     {/* Drag indicator line: above */}
@@ -655,8 +1311,8 @@ export default function QuoteManager({
                       <div className="absolute bottom-0 left-0 right-0 h-1 bg-amber-500 rounded-full z-10 animate-pulse" />
                     )}
                     {editingQuoteId === q.id ? (
-                      <form onSubmit={(e) => handleSaveEdit(e, q.id)} className="flex-1 flex flex-col gap-3">
-                        <div className="flex flex-col gap-1">
+                      <form onSubmit={(e) => handleSaveEdit(e, q.id)} className="flex-1 flex flex-col gap-3 w-full">
+                        <div className="flex flex-col gap-1 w-full">
                           <textarea
                             id={`edit-quote-textarea-${q.id}`}
                             className="w-full text-sm bg-white border border-stone-300 rounded-lg px-3 py-2 text-stone-800 placeholder-stone-400 focus:outline-none focus:border-amber-600 focus:ring-1 focus:ring-amber-600 transition-all resize-none font-serif"
@@ -720,91 +1376,165 @@ export default function QuoteManager({
                       </form>
                     ) : (
                       <>
-                        <div className="flex items-center self-stretch pr-1 text-stone-300 group-hover:text-stone-400 transition-colors cursor-grab active:cursor-grabbing shrink-0" title="Drag to reorder">
-                          <GripVertical className="w-4 h-4" />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="font-serif text-[15px] text-stone-800 font-medium leading-relaxed">
-                            "{renderFormattedText(q.text)}"
-                          </p>
-                          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-3">
-                            <span className="text-xs font-semibold text-stone-500 uppercase tracking-wide">
-                              — {q.author}
-                            </span>
-                            <span className="text-[10px] text-stone-400 font-mono flex items-center gap-1">
+                        {/* Top Controls Row spanning full width */}
+                        <div className="flex items-center justify-between w-full border-b border-stone-150 pb-2.5">
+                          {/* Left controls: Select Checkbox, Drag indicator, Hidden status & Date */}
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <input
+                              type="checkbox"
+                              checked={selectedQuoteIds.includes(q.id)}
+                              onChange={(e) => {
+                                e.stopPropagation();
+                                setSelectedQuoteIds((prev) => {
+                                  if (prev.includes(q.id)) {
+                                    return prev.filter((id) => id !== q.id);
+                                  } else {
+                                    return [...prev, q.id];
+                                  }
+                                });
+                                setLastSelectedId(q.id);
+                              }}
+                              className="w-4 h-4 rounded border-stone-300 text-amber-600 focus:ring-amber-500 cursor-pointer shrink-0"
+                            />
+
+                            {quoteFilter === "all" && (
+                              <div className="flex items-center text-stone-300 group-hover:text-stone-400 transition-colors cursor-grab active:cursor-grabbing shrink-0" title="Drag to reorder">
+                                <GripVertical className="w-4 h-4" />
+                              </div>
+                            )}
+
+                            {q.isActive === false && (
+                              <span className="text-[9px] font-bold tracking-wider text-stone-500 bg-stone-200/60 border border-stone-300 px-1.5 py-0.5 rounded-sm uppercase font-sans shrink-0">
+                                Hidden
+                              </span>
+                            )}
+
+                            <span className="text-[10px] text-stone-400 font-mono flex items-center gap-1 shrink-0 select-none">
                               <Calendar className="w-3 h-3" />
                               {formatDate(q.createdAt)}
                             </span>
                           </div>
+
+                          {/* Right action buttons: Full row by themselves */}
+                          <div className="flex items-center gap-1 shrink-0">
+                            {/* Play/Preview button */}
+                            <button
+                              id={`preview-quote-btn-${q.id}`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (onPlayQuote) {
+                                  onPlayQuote(q.id);
+                                }
+                              }}
+                              className="p-1.5 text-amber-600 hover:text-amber-700 hover:bg-amber-50 rounded-lg border border-amber-200/50 transition-all cursor-pointer flex items-center justify-center"
+                              title="Play Quote in Zen Mode"
+                            >
+                              <Play className="w-3.5 h-3.5 fill-current" />
+                            </button>
+
+                            {/* Edit button */}
+                            <button
+                              id={`edit-quote-btn-${q.id}`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleStartEdit(q);
+                              }}
+                              className="p-1.5 text-stone-400 hover:text-amber-700 hover:bg-stone-100 rounded-lg border border-transparent transition-all cursor-pointer"
+                              title="Edit Quote"
+                            >
+                              <Pencil className="w-3.5 h-3.5" />
+                            </button>
+
+                            {/* Visibility status Quick Toggle */}
+                            <button
+                              id={`toggle-active-${q.id}`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleToggleActive(q.id, q.isActive !== false);
+                              }}
+                              className={`p-1.5 rounded-lg border transition-all cursor-pointer ${
+                                q.isActive !== false
+                                  ? "text-stone-400 hover:text-stone-750 hover:bg-stone-100 border-transparent"
+                                  : "text-amber-700 bg-amber-50 border-amber-300"
+                              }`}
+                              title={q.isActive !== false ? "Hide Quote from slideshow" : "Show Quote in slideshow"}
+                            >
+                              {q.isActive !== false ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
+                            </button>
+
+                            {/* Thumbs Up button */}
+                            <button
+                              id={`rate-up-quote-${q.id}`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onRateQuote(q.id, q.rating === 'up' ? null : 'up');
+                              }}
+                              className={`p-1.5 rounded-lg border transition-all cursor-pointer ${
+                                q.rating === 'up'
+                                  ? "text-emerald-700 bg-emerald-50 border-emerald-300"
+                                  : "text-stone-400 hover:text-stone-700 hover:bg-stone-100 border-transparent"
+                              }`}
+                              title="Thumbs Up"
+                            >
+                              <ThumbsUp className={`w-3.5 h-3.5 ${q.rating === 'up' ? "fill-current" : ""}`} />
+                            </button>
+
+                            {/* Thumbs Down button */}
+                            <button
+                              id={`rate-down-quote-${q.id}`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onRateQuote(q.id, q.rating === 'down' ? null : 'down');
+                              }}
+                              className={`p-1.5 rounded-lg border transition-all cursor-pointer ${
+                                q.rating === 'down'
+                                  ? "text-red-700 bg-red-50 border-red-300"
+                                  : "text-stone-400 hover:text-stone-700 hover:bg-stone-100 border-transparent"
+                              }`}
+                              title="Thumbs Down"
+                            >
+                              <ThumbsDown className={`w-3.5 h-3.5 ${q.rating === 'down' ? "fill-current" : ""}`} />
+                            </button>
+
+                            {/* Delete button */}
+                            <button
+                              id={`delete-quote-${q.id}`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onDeleteQuote(q.id);
+                              }}
+                              className="p-1.5 text-stone-400 hover:text-red-600 hover:bg-stone-100 rounded-lg border border-transparent transition-all cursor-pointer"
+                              title="Delete Quote"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
                         </div>
 
-                        <div className="flex items-center gap-1 shrink-0">
-                          {/* Play/Preview button */}
-                          <button
-                            id={`preview-quote-btn-${q.id}`}
-                            onClick={() => {
-                              if (onPlayQuote) {
-                                onPlayQuote(q.id);
-                              }
-                            }}
-                            className="p-1.5 text-amber-600 hover:text-amber-700 hover:bg-amber-50 rounded-lg border border-amber-200/50 transition-all cursor-pointer flex items-center justify-center"
-                            title="Play Quote in Zen Mode"
-                          >
-                            <Play className="w-3.5 h-3.5 fill-current" />
-                          </button>
-
-                          {/* Edit button */}
-                          <button
-                            id={`edit-quote-btn-${q.id}`}
-                            onClick={() => handleStartEdit(q)}
-                            className="p-1.5 text-stone-400 hover:text-amber-700 hover:bg-stone-100 rounded-lg border border-transparent transition-all cursor-pointer"
-                            title="Edit Quote"
-                          >
-                            <Pencil className="w-3.5 h-3.5" />
-                          </button>
-
-                          {/* Thumbs Up button */}
-                          <button
-                            id={`rate-up-quote-${q.id}`}
-                            onClick={() => onRateQuote(q.id, q.rating === 'up' ? null : 'up')}
-                            className={`p-1.5 rounded-lg border transition-all cursor-pointer ${
-                              q.rating === 'up'
-                                ? "text-emerald-700 bg-emerald-50 border-emerald-300"
-                                : "text-stone-400 hover:text-stone-700 hover:bg-stone-100 border-transparent"
-                            }`}
-                            title="Thumbs Up"
-                          >
-                            <ThumbsUp className={`w-3.5 h-3.5 ${q.rating === 'up' ? "fill-current" : ""}`} />
-                          </button>
-
-                          {/* Thumbs Down button */}
-                          <button
-                            id={`rate-down-quote-${q.id}`}
-                            onClick={() => onRateQuote(q.id, q.rating === 'down' ? null : 'down')}
-                            className={`p-1.5 rounded-lg border transition-all cursor-pointer ${
-                              q.rating === 'down'
-                                ? "text-red-700 bg-red-50 border-red-300"
-                                : "text-stone-400 hover:text-stone-700 hover:bg-stone-100 border-transparent"
-                            }`}
-                            title="Thumbs Down"
-                          >
-                            <ThumbsDown className={`w-3.5 h-3.5 ${q.rating === 'down' ? "fill-current" : ""}`} />
-                          </button>
-
-                          {/* Delete button */}
-                          <button
-                            id={`delete-quote-${q.id}`}
-                            onClick={() => onDeleteQuote(q.id)}
-                            className="p-1.5 text-stone-400 hover:text-red-600 hover:bg-stone-100 rounded-lg border border-transparent transition-all cursor-pointer"
-                            title="Delete Quote"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
+                        {/* Verse Text underneath (Full Width) */}
+                        <div className="w-full mt-1">
+                          <p className={`font-serif text-stone-800 font-medium leading-relaxed ${getFontSizeClass(fontSizeLevel)} ${q.isActive === false ? "text-stone-500 line-through decoration-stone-300" : ""}`}>
+                            "{renderFormattedText(q.text)}"
+                          </p>
+                          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-3.5 pt-2 border-t border-stone-100/50">
+                            <span className="text-xs font-semibold text-stone-500 uppercase tracking-wide">
+                              — {q.author}
+                            </span>
+                          </div>
                         </div>
                       </>
                     )}
                   </motion.div>
                 ))
+              ) : sortedQuotes.length > 0 ? (
+                <div id="empty-filter-notice" className="border border-dashed border-stone-200 rounded-xl p-8 text-center text-stone-500 text-sm">
+                  <p className="font-serif italic font-medium mb-1">
+                    No quotes match the selected filter.
+                  </p>
+                  <p className="text-xs text-stone-400">
+                    Try choosing "All" or adding some quotes that fit this filter.
+                  </p>
+                </div>
               ) : (
                 <div id="empty-category-notice" className="border-2 border-dashed border-stone-200 rounded-xl p-8 text-center text-stone-500 text-sm">
                   <p className="font-serif italic font-medium mb-1">
@@ -941,6 +1671,290 @@ export default function QuoteManager({
           </button>
         </div>
       )}
+
+      {/* Bulk Paste Dialog */}
+      {isBulkModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-900/65 backdrop-blur-[2px]">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="bg-white border border-stone-200 shadow-2xl rounded-3xl w-full max-w-2xl flex flex-col max-h-[85vh] relative z-10"
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-stone-150 px-6 py-4 shrink-0">
+              <div className="flex items-center gap-2">
+                <Sparkles className="w-5 h-5 text-amber-600" />
+                <h3 className="font-serif text-lg font-bold text-stone-900">
+                  Bulk Add Quotes to "{category.name}"
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsBulkModalOpen(false);
+                  setBulkInputText("");
+                  setParsedBulkQuotes([]);
+                  setBulkParseError("");
+                }}
+                className="text-stone-400 hover:text-stone-600 transition-colors p-1.5 rounded-lg hover:bg-stone-50 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Content Body */}
+            <div className="flex-1 overflow-y-auto p-6 flex flex-col gap-4">
+              {parsedBulkQuotes.length === 0 ? (
+                <>
+                  <div className="text-xs text-stone-500 leading-relaxed bg-stone-50 border border-stone-150 p-4 rounded-2xl flex flex-col gap-2 shadow-2xs">
+                    <p className="font-bold text-stone-700">How to Format Your Quotes:</p>
+                    <ul className="list-disc list-inside space-y-1 bg-white p-3 rounded-xl border border-stone-150">
+                      <li><strong>JSON Array</strong>: <code className="font-mono bg-stone-100 px-1 py-0.5 rounded text-[11px]">[{"{"}"text": "Your quote...", "author": "Author"{"}"}]</code></li>
+                      <li><strong>Line-by-Line with Delimiter</strong>: <code className="font-mono bg-stone-100 px-1 py-0.5 rounded text-[11px]">Quote Text | Author Name</code> (Supports <code className="font-mono bg-stone-100 px-1.5 py-0.5 rounded text-[11px]">|</code>, semicolon <code className="font-mono bg-stone-100 px-1.5 py-0.5 rounded text-[11px] text-amber-700">;</code>, tilde <code className="font-mono bg-stone-100 px-1.5 py-0.5 rounded text-[11px] text-amber-700">~</code>, or tabs)</li>
+                      <li><strong>CSV Formatted</strong>: <code className="font-mono bg-stone-100 px-1 py-0.5 rounded text-[11px]">"Quote text", "Author"</code></li>
+                      <li><strong>Plain Text Lines</strong>: Just paste quotes line-by-line; they'll import with "Unknown" as author.</li>
+                    </ul>
+                  </div>
+
+                  <div className="flex flex-col gap-1.5 flex-1 min-h-[200px]">
+                    <label className="text-xs font-semibold text-stone-600 uppercase pl-1 tracking-wider">Paste raw content below</label>
+                    <textarea
+                      id="bulk-paste-textarea"
+                      value={bulkInputText}
+                      onChange={(e) => setBulkInputText(e.target.value)}
+                      placeholder='Example:&#10;"The only limit to our realization of tomorrow is our doubts of today." | Franklin D. Roosevelt&#10;"Life is what happens when you are busy making other plans." | John Lennon'
+                      className="w-full flex-1 min-h-[160px] text-xs bg-stone-50 border border-stone-200 rounded-2xl px-4 py-3 text-stone-800 placeholder-stone-400 focus:outline-none focus:border-amber-600 focus:ring-1 focus:ring-amber-600 transition-all font-mono resize-none shadow-2xs"
+                    />
+                  </div>
+
+                  {bulkParseError && (
+                    <div className="bg-red-50 border border-red-200 rounded-xl p-3 text-xs text-red-600 font-semibold flex items-center gap-2">
+                      <span>⚠️</span> {bulkParseError}
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="flex flex-col gap-4">
+                  {/* Top Row: Preview title, A+/A- controls, Change Input */}
+                  <div className="flex flex-wrap items-center justify-between gap-3 bg-stone-50 border border-stone-200 p-3.5 rounded-2xl">
+                    <div className="flex items-center gap-3">
+                      <span className="text-xs font-semibold text-stone-600 uppercase tracking-wider">
+                        Preview ({parsedBulkQuotes.length} quotes)
+                      </span>
+                      {/* Font Size Modifier Controls for Bulk Preview */}
+                      <div className="flex items-center gap-1 border border-stone-200 bg-white px-2 py-0.5 rounded-xl text-stone-600 font-sans text-xs shadow-3xs shrink-0">
+                        <span className="font-semibold text-stone-500 mr-1 select-none text-[10px]">Size:</span>
+                        <button
+                          type="button"
+                          onClick={() => setBulkFontSizeLevel(prev => Math.max(1, prev - 1))}
+                          disabled={bulkFontSizeLevel === 1}
+                          className="w-5 h-5 flex items-center justify-center rounded-lg hover:bg-stone-100 disabled:opacity-40 font-bold transition-colors cursor-pointer text-stone-700 text-xs"
+                          title="Decrease preview font size"
+                        >
+                          A-
+                        </button>
+                        <span className="w-4 text-center font-bold text-amber-700 select-none text-xs">{bulkFontSizeLevel}</span>
+                        <button
+                          type="button"
+                          onClick={() => setBulkFontSizeLevel(prev => Math.min(8, prev + 1))}
+                          disabled={bulkFontSizeLevel === 8}
+                          className="w-5 h-5 flex items-center justify-center rounded-lg hover:bg-stone-100 disabled:opacity-40 font-bold transition-colors cursor-pointer text-stone-700 text-xs"
+                          title="Increase preview font size"
+                        >
+                          A+
+                        </button>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setParsedBulkQuotes([]);
+                        setBulkPreviewFilter("all");
+                      }}
+                      className="text-amber-700 hover:text-amber-800 text-xs font-bold hover:underline cursor-pointer bg-white border border-stone-250 px-2.5 py-1 rounded-lg transition-all"
+                    >
+                      Change Input
+                    </button>
+                  </div>
+
+                  {/* Filter selector row */}
+                  <div className="flex items-center gap-1.5 flex-wrap px-1">
+                    <span className="text-stone-500 font-sans text-xs font-semibold select-none mr-1.5">View Filter:</span>
+                    <button
+                      type="button"
+                      onClick={() => setBulkPreviewFilter("all")}
+                      className={`px-3 py-1 rounded-lg font-sans text-xs font-bold border transition-all cursor-pointer ${
+                        bulkPreviewFilter === "all"
+                          ? "bg-stone-850 border-stone-900 text-white shadow-3xs"
+                          : "bg-white border-stone-200 text-stone-600 hover:bg-stone-50"
+                      }`}
+                    >
+                      All ({parsedBulkQuotes.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setBulkPreviewFilter("unique")}
+                      className={`px-3 py-1 rounded-lg font-sans text-xs font-bold border transition-all cursor-pointer ${
+                        bulkPreviewFilter === "unique"
+                          ? "bg-amber-600 border-amber-700 text-white shadow-3xs"
+                          : "bg-white border-stone-200 text-stone-600 hover:bg-stone-50"
+                      }`}
+                      title="Excludes duplicates in this category"
+                    >
+                      Unique / Importable ({uniqueParsedBulk.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setBulkPreviewFilter("new")}
+                      className={`px-3 py-1 rounded-lg font-sans text-xs font-bold border transition-all cursor-pointer ${
+                        bulkPreviewFilter === "new"
+                          ? "bg-emerald-600 border-emerald-700 text-white shadow-3xs"
+                          : "bg-white border-stone-200 text-stone-600 hover:bg-stone-50"
+                      }`}
+                      title="Only shows brand-new quotes not in any category"
+                    >
+                      New Only ({newParsedBulk.length})
+                    </button>
+                  </div>
+
+                  {/* Scrollable list of parsed quotes */}
+                  <div className="border border-stone-200 rounded-2xl max-h-[350px] overflow-y-auto divide-y divide-stone-150 bg-stone-50/50 shadow-2xs">
+                    {visibleBulkQuotes.length === 0 ? (
+                      <div className="p-10 text-center text-stone-500 font-sans text-sm">
+                        <p className="font-serif italic font-medium text-stone-700 mb-1">
+                          No quotes match the selected filter.
+                        </p>
+                        <p className="text-xs text-stone-400">
+                          Try choosing "All" or adding some quotes that fit this filter.
+                        </p>
+                      </div>
+                    ) : (
+                      visibleBulkQuotes.map((q, idx) => {
+                        const existStatus = checkQuoteExistence(q.text);
+                        return (
+                          <div key={idx} className="p-5 flex items-start justify-between gap-5 hover:bg-white transition-colors">
+                            <div className="flex-1 min-w-0">
+                              <p className={`font-serif text-stone-850 leading-relaxed italic font-medium ${getBulkFontSizeClass(bulkFontSizeLevel)}`}>
+                                "{q.text}"
+                              </p>
+                              <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5 mt-2">
+                                <span className="text-[11px] md:text-xs font-bold text-stone-500 uppercase tracking-widest shrink-0">
+                                  — {q.author}
+                                </span>
+                                {existStatus.status === "same_category" && (
+                                  <span className="inline-flex items-center text-[9px] font-bold text-white bg-red-600 border border-red-750 px-2 py-0.5 rounded-md select-none font-sans uppercase tracking-wider shadow-3xs">
+                                    Already in this Category
+                                  </span>
+                                )}
+                                {existStatus.status === "other_category" && (
+                                  <span className="inline-flex items-center text-[9px] font-bold text-blue-700 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded-md select-none font-sans uppercase tracking-wider" title={`Found in category: ${existStatus.otherCategoryName}`}>
+                                    In Category: {existStatus.otherCategoryName}
+                                  </span>
+                                )}
+                                {existStatus.status === "new" && (
+                                  <span className="inline-flex items-center text-[9px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md select-none font-sans uppercase tracking-wider">
+                                    New
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setParsedBulkQuotes(prev => prev.filter(item => item.text !== q.text));
+                              }}
+                              className="text-stone-400 hover:text-red-600 p-1 rounded-lg transition-colors cursor-pointer shrink-0 mt-1"
+                              title="Exclude this quote"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="border-t border-stone-150 px-6 py-4 flex gap-3 justify-end bg-stone-50 rounded-b-3xl shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsBulkModalOpen(false);
+                  setBulkInputText("");
+                  setParsedBulkQuotes([]);
+                  setBulkParseError("");
+                  setBulkPreviewFilter("all");
+                }}
+                className="px-4 py-2 border border-stone-250 bg-white text-stone-600 font-sans text-xs font-semibold rounded-xl cursor-pointer hover:bg-stone-50 transition-colors shadow-2xs"
+              >
+                Cancel
+              </button>
+
+              {parsedBulkQuotes.length === 0 ? (
+                <button
+                  type="button"
+                  onClick={handleRunBulkParse}
+                  className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white font-sans text-xs font-bold rounded-xl cursor-pointer transition-all shadow-xs"
+                >
+                  Parse & Preview Quotes
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleAddBulkToCategory}
+                  disabled={
+                    (bulkPreviewFilter === "new" && newParsedBulk.length === 0) ||
+                    (bulkPreviewFilter !== "new" && uniqueParsedBulk.length === 0)
+                  }
+                  className={`px-4 py-2 text-white font-sans text-xs font-bold rounded-xl cursor-pointer transition-all shadow-xs disabled:opacity-40 disabled:cursor-not-allowed ${
+                    bulkPreviewFilter === "new"
+                      ? "bg-emerald-600 hover:bg-emerald-700"
+                      : "bg-amber-600 hover:bg-amber-700"
+                  }`}
+                >
+                  {bulkPreviewFilter === "new"
+                    ? `Add ${newParsedBulk.length} New Quotes`
+                    : `Add ${uniqueParsedBulk.length} Unique Quotes`}
+                </button>
+              )}
+            </div>
+          </motion.div>
+        </div>
+      )}
+
+      {/* Undo Toast Notification */}
+      <AnimatePresence>
+        {toastMessage && (
+          <motion.div
+            initial={{ opacity: 0, y: 50, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 40, scale: 0.95 }}
+            className="fixed bottom-6 right-6 z-[99] bg-stone-900 text-stone-100 text-xs py-3.5 px-5 rounded-2xl shadow-xl flex items-center gap-4 border border-stone-800"
+          >
+            <span className="font-medium">{toastMessage.text}</span>
+            {toastMessage.onAction && (
+              <button
+                onClick={() => {
+                  toastMessage.onAction?.();
+                  setToastMessage(null);
+                }}
+                className="text-amber-400 hover:text-amber-300 font-bold uppercase text-xs tracking-wider border-l border-stone-800 pl-4 cursor-pointer hover:underline"
+              >
+                {toastMessage.actionText || "Undo"}
+              </button>
+            )}
+            <button
+              onClick={() => setToastMessage(null)}
+              className="text-stone-400 hover:text-stone-200 cursor-pointer ml-1"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

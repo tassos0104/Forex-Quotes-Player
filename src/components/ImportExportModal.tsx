@@ -1,16 +1,18 @@
 import React, { useRef, useState } from "react";
-import { Category, Quote } from "../types";
+import { Category, Quote, Folder } from "../types";
 import { Upload, Download, FileJson, AlertTriangle, Check, X, HelpCircle } from "lucide-react";
 
 interface ImportExportProps {
+  folders: Folder[];
   categories: Category[];
   quotes: Quote[];
-  onImport: (importedCategories: Category[], importedQuotes: Quote[], mode: "merge" | "overwrite") => void;
+  onImport: (importedCategories: Category[], importedQuotes: Quote[], mode: "merge" | "overwrite", importedFolders?: Folder[]) => void;
   isOpen: boolean;
   onClose: () => void;
 }
 
 export default function ImportExportModal({
+  folders,
   categories,
   quotes,
   onImport,
@@ -20,15 +22,15 @@ export default function ImportExportModal({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [importMode, setImportMode] = useState<"merge" | "overwrite">("merge");
   const [status, setStatus] = useState<{ type: "success" | "error" | "info"; message: string } | null>(null);
-  const [previewData, setPreviewData] = useState<{ categoriesCount: number; quotesCount: number } | null>(null);
-  const [parsedData, setParsedData] = useState<{ categories: Category[]; quotes: Quote[] } | null>(null);
+  const [previewData, setPreviewData] = useState<{ categoriesCount: number; quotesCount: number; foldersCount?: number } | null>(null);
+  const [parsedData, setParsedData] = useState<{ categories: Category[]; quotes: Quote[]; folders?: Folder[] } | null>(null);
   const [showSchemaInfo, setShowSchemaInfo] = useState(false);
 
   if (!isOpen) return null;
 
   // Handle exporting all data
   const handleExport = () => {
-    const dataStr = JSON.stringify({ categories, quotes }, null, 2);
+    const dataStr = JSON.stringify({ folders, categories, quotes }, null, 2);
     const blob = new Blob([dataStr], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -50,6 +52,17 @@ export default function ImportExportModal({
       if (data && typeof data === "object" && !Array.isArray(data)) {
         let importedCats: Category[] = [];
         let importedQuotes: Quote[] = [];
+        let importedFolders: Folder[] = [];
+
+        if (Array.isArray(data.folders)) {
+          importedFolders = data.folders.filter(
+            (f: any) => typeof f === "object" && typeof f.id === "string" && typeof f.name === "string"
+          ).map((f: any) => ({
+            id: f.id,
+            name: f.name,
+            isCustom: f.isCustom !== undefined ? f.isCustom : true,
+          }));
+        }
 
         if (Array.isArray(data.categories)) {
           importedCats = data.categories.filter(
@@ -59,6 +72,7 @@ export default function ImportExportModal({
             name: c.name,
             isCustom: c.isCustom !== undefined ? c.isCustom : true,
             isShufflable: c.isShufflable !== undefined ? c.isShufflable : true,
+            folderId: c.folderId,
           }));
         }
 
@@ -79,7 +93,7 @@ export default function ImportExportModal({
           throw new Error("No valid category or quote data found in the backup file.");
         }
 
-        return { categories: importedCats, quotes: importedQuotes };
+        return { categories: importedCats, quotes: importedQuotes, folders: importedFolders };
       }
 
       // Scenario 2: Flat array of quotes, possibly with a "category" name string
@@ -150,10 +164,12 @@ export default function ImportExportModal({
         setPreviewData({
           categoriesCount: parsed.categories.length,
           quotesCount: parsed.quotes.length,
+          foldersCount: parsed.folders?.length,
         });
+        const foldersMsg = parsed.folders && parsed.folders.length > 0 ? ` ${parsed.folders.length} folders,` : "";
         setStatus({
           type: "info",
-          message: `Successfully parsed JSON! Found ${parsed.quotes.length} quotes and ${parsed.categories.length} new categories.`,
+          message: `Successfully parsed JSON! Found${foldersMsg} ${parsed.categories.length} categories, and ${parsed.quotes.length} quotes.`,
         });
       } catch (err: any) {
         setStatus({ type: "error", message: err.message });
@@ -167,7 +183,7 @@ export default function ImportExportModal({
   // Submit parsed data
   const handleImportSubmit = () => {
     if (!parsedData) return;
-    onImport(parsedData.categories, parsedData.quotes, importMode);
+    onImport(parsedData.categories, parsedData.quotes, importMode, parsedData.folders);
     setStatus({
       type: "success",
       message: `Import complete! Loaded ${parsedData.quotes.length} quotes using '${importMode}' mode.`,

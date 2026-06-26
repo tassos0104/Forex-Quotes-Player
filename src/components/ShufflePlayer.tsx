@@ -122,14 +122,14 @@ export default function ShufflePlayer({
     const shufflableCatIds = shufflableCategories.map((c) => c.id);
     let pool: Quote[] = [];
     if (searchPlayList) {
-      pool = searchPlayList;
+      pool = searchPlayList.filter((q) => q.isActive !== false);
     } else if (shuffleFavoritesOnly) {
       // Also filter thumbs-up quotes by selected categories so that favorites only play from selected categories
-      const filtered = allQuotes.filter((q) => q.rating === "up" && shufflableCatIds.includes(q.categoryId));
+      const filtered = allQuotes.filter((q) => q.rating === "up" && shufflableCatIds.includes(q.categoryId) && q.isActive !== false);
       pool = [...filtered].sort((a, b) => b.createdAt - a.createdAt);
     } else {
       const filtered = allQuotes.filter((q) =>
-        shufflableCatIds.includes(q.categoryId)
+        shufflableCatIds.includes(q.categoryId) && q.isActive !== false
       );
       // Sort shufflePool by createdAt descending so sequential (In Order) mode matches the Quote Catalog's visual layout
       pool = [...filtered].sort((a, b) => b.createdAt - a.createdAt);
@@ -257,6 +257,12 @@ export default function ShufflePlayer({
     };
   }, []);
 
+  // A ref to keep track of isControlsVisible inside event listeners without rebuilding them
+  const isControlsVisibleRef = useRef(isControlsVisible);
+  useEffect(() => {
+    isControlsVisibleRef.current = isControlsVisible;
+  }, [isControlsVisible]);
+
   // Auto-hide Zen controls and mouse cursor after 3 seconds of idle time
   useEffect(() => {
     if (!isZenMode) {
@@ -265,27 +271,165 @@ export default function ShufflePlayer({
     }
 
     let timeoutId: any;
+    
+    // baselineX/Y tracks the starting position of a potential gesture to SHOW controls when they are hidden.
+    // It gets reset when controls are shown, or when they are hidden.
+    let baselineX = -1;
+    let baselineY = -1;
 
-    const handleActivity = () => {
-      setIsControlsVisible(true);
+    // lastActiveX/Y tracks the last coordinate where the controls were shown or where an activity timeout reset occurred.
+    // We only reset the idle timeout if the mouse has moved by >= 15px from this position.
+    let lastActiveX = -1;
+    let lastActiveY = -1;
+
+    const resetTimeout = () => {
       clearTimeout(timeoutId);
       timeoutId = setTimeout(() => {
-        // Prevent auto-hiding if dropdowns/pickers are actively open
         if (!showColorPicker && !showShortcuts) {
           setIsControlsVisible(false);
+          // When hiding, reset all baselines and coordinates so the next movement is fresh
+          baselineX = -1;
+          baselineY = -1;
+          lastActiveX = -1;
+          lastActiveY = -1;
         }
       }, 3000);
+    };
+
+    const handleActivity = (e?: Event) => {
+      const isVisible = isControlsVisibleRef.current;
+
+      if (e && e.type === "mousemove") {
+        const mouseEvent = e as MouseEvent;
+        const currentX = mouseEvent.clientX;
+        const currentY = mouseEvent.clientY;
+
+        if (!isVisible) {
+          // Controls are NOT visible. We require 100px move from baseline to show them.
+          if (baselineX === -1 || baselineY === -1) {
+            baselineX = currentX;
+            baselineY = currentY;
+            return;
+          }
+
+          const dx = currentX - baselineX;
+          const dy = currentY - baselineY;
+          const distance = Math.sqrt(dx * dx + dy * dy);
+
+          if (distance >= 100) {
+            setIsControlsVisible(true);
+            baselineX = currentX;
+            baselineY = currentY;
+            lastActiveX = currentX;
+            lastActiveY = currentY;
+            resetTimeout();
+          }
+        } else {
+          // Controls ARE visible. We require 15px movement from last active coordinate to reset the 3-second timeout.
+          // This prevents tiny mouse sensor jitter or mouse click micro-movements from keeping controls visible forever.
+          if (lastActiveX === -1 || lastActiveY === -1) {
+            lastActiveX = currentX;
+            lastActiveY = currentY;
+            return;
+          }
+
+          const dx = currentX - lastActiveX;
+          const dy = currentY - lastActiveY;
+          const distance = Math.sqrt(dx * dx + dy * dy);
+
+          if (distance >= 15) {
+            lastActiveX = currentX;
+            lastActiveY = currentY;
+            // Also update baseline so we have a fresh starting position if it hides later
+            baselineX = currentX;
+            baselineY = currentY;
+            resetTimeout();
+          }
+        }
+      } else if (e && e.type === "touchstart") {
+        const touchEvent = e as TouchEvent;
+        if (touchEvent.touches && touchEvent.touches.length > 0) {
+          const currentX = touchEvent.touches[0].clientX;
+          const currentY = touchEvent.touches[0].clientY;
+          
+          if (!isVisible) {
+            // Touch down doesn't show controls immediately unless they move (handled in touchmove)
+            // But we set baselines so we can measure movement
+            baselineX = currentX;
+            baselineY = currentY;
+          } else {
+            // Touch down can reset timeout if already visible, or we can wait for significant move.
+            // Let's reset the timeout on any direct touch start to be responsive.
+            lastActiveX = currentX;
+            lastActiveY = currentY;
+            resetTimeout();
+          }
+        }
+      } else {
+        // e is undefined, meaning this was an initial/on-mount call.
+        // On initial mount or when states change, show controls and set a timeout.
+        if (isVisible) {
+          resetTimeout();
+        }
+      }
     };
 
     // Initialize/show on mount or when states change
     handleActivity();
 
-    window.addEventListener("mousemove", handleActivity);
-    window.addEventListener("touchstart", handleActivity);
+    const listener = handleActivity as EventListener;
+
+    window.addEventListener("mousemove", listener);
+    window.addEventListener("touchstart", listener);
+
+    const handleTouchMove = (e: TouchEvent) => {
+      if (e.touches && e.touches.length > 0) {
+        const touch = e.touches[0];
+        const currentX = touch.clientX;
+        const currentY = touch.clientY;
+        const isVisible = isControlsVisibleRef.current;
+
+        if (!isVisible) {
+          if (baselineX !== -1 && baselineY !== -1) {
+            const dx = currentX - baselineX;
+            const dy = currentY - baselineY;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            if (distance >= 30) { // smaller threshold of 30px for touch swipe on mobile
+              setIsControlsVisible(true);
+              baselineX = currentX;
+              baselineY = currentY;
+              lastActiveX = currentX;
+              lastActiveY = currentY;
+              resetTimeout();
+            }
+          } else {
+            baselineX = currentX;
+            baselineY = currentY;
+          }
+        } else {
+          if (lastActiveX !== -1 && lastActiveY !== -1) {
+            const dx = currentX - lastActiveX;
+            const dy = currentY - lastActiveY;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            if (distance >= 15) {
+              lastActiveX = currentX;
+              lastActiveY = currentY;
+              resetTimeout();
+            }
+          } else {
+            lastActiveX = currentX;
+            lastActiveY = currentY;
+          }
+        }
+      }
+    };
+
+    window.addEventListener("touchmove", handleTouchMove as EventListener);
 
     return () => {
-      window.removeEventListener("mousemove", handleActivity);
-      window.removeEventListener("touchstart", handleActivity);
+      window.removeEventListener("mousemove", listener);
+      window.removeEventListener("touchstart", listener);
+      window.removeEventListener("touchmove", handleTouchMove as EventListener);
       clearTimeout(timeoutId);
     };
   }, [isZenMode, showColorPicker, showShortcuts]);
@@ -1067,6 +1211,15 @@ export default function ShufflePlayer({
                 onClick={() => {
                   if (!isSequentialDisabled) {
                     setPlayMode("sequential");
+                    safeCancelSpeech();
+                    setIsSpeaking(false);
+                    if (shufflePool.length > 0) {
+                      setCurrentQuoteIndex(0);
+                      setHistory([0]);
+                      setHistoryPos(0);
+                      setIsPlaying(true);
+                      setTimerTrigger((prev) => prev + 1);
+                    }
                   }
                 }}
                 className={`px-2.5 py-1 rounded-md transition-all flex items-center gap-1 ${

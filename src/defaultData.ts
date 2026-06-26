@@ -1,10 +1,10 @@
 import { Category, Quote } from "./types";
 
 export const DEFAULT_CATEGORIES: Category[] = [
-  { id: "inspiration", name: "Inspiration", isShufflable: true },
-  { id: "mindfulness", name: "Mindfulness", isShufflable: true },
-  { id: "creativity", name: "Creativity", isShufflable: true },
-  { id: "wisdom", name: "Wisdom", isShufflable: true },
+  { id: "inspiration", name: "Inspiration", isShufflable: true, folderId: "forex" },
+  { id: "mindfulness", name: "Mindfulness", isShufflable: true, folderId: "forex" },
+  { id: "creativity", name: "Creativity", isShufflable: true, folderId: "forex" },
+  { id: "wisdom", name: "Wisdom", isShufflable: true, folderId: "forex" },
 ];
 
 export const DEFAULT_QUOTES: Quote[] = [

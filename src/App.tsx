@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Category, Quote } from "./types";
+import { Category, Quote, Folder } from "./types";
 import { DEFAULT_CATEGORIES, DEFAULT_QUOTES } from "./defaultData";
 import Sidebar from "./components/Sidebar";
 import ShufflePlayer from "./components/ShufflePlayer";
@@ -11,12 +11,34 @@ import SearchModal from "./components/SearchModal";
 
 export default function App() {
   const [isImportExportOpen, setIsImportExportOpen] = useState(false);
+  
+  // Folders State
+  const [folders, setFolders] = useState<Folder[]>(() => {
+    try {
+      const stored = localStorage.getItem("quote_shuffle_folders");
+      if (stored) {
+        return JSON.parse(stored);
+      }
+    } catch (e) {
+      console.error("LocalStorage access blocked or failed for folders, using defaults.", e);
+    }
+    return [
+      { id: "forex", name: "FOREX" },
+      { id: "bible", name: "BIBLE" },
+    ];
+  });
+
   // State Initialization from LocalStorage or Default Data
   const [categories, setCategories] = useState<Category[]>(() => {
     try {
       const stored = localStorage.getItem("quote_shuffle_categories");
       if (stored) {
-        return JSON.parse(stored);
+        const parsed = JSON.parse(stored) as Category[];
+        // Backwards compatibility: ensure all categories have a folderId, defaulting to forex
+        return parsed.map((cat) => ({
+          ...cat,
+          folderId: cat.folderId || "forex",
+        }));
       }
     } catch (e) {
       console.error("LocalStorage access blocked or failed for categories, using defaults.", e);
@@ -53,6 +75,14 @@ export default function App() {
   // Persist state updates to LocalStorage
   useEffect(() => {
     try {
+      localStorage.setItem("quote_shuffle_folders", JSON.stringify(folders));
+    } catch (e) {
+      console.warn("Could not save folders to localStorage:", e);
+    }
+  }, [folders]);
+
+  useEffect(() => {
+    try {
       localStorage.setItem("quote_shuffle_categories", JSON.stringify(categories));
     } catch (e) {
       console.warn("Could not save categories to localStorage:", e);
@@ -67,11 +97,46 @@ export default function App() {
     }
   }, [quotes]);
 
+  // Handlers for Folders
+  const handleAddFolder = (name: string) => {
+    const newFolder: Folder = {
+      id: `folder-${Date.now()}`,
+      name,
+      isCustom: true,
+    };
+    setFolders((prev) => [...prev, newFolder]);
+  };
+
+  const handleDeleteFolder = (folderId: string) => {
+    setFolders((prev) => prev.filter((f) => f.id !== folderId));
+    // Also delete all categories belonging to this folder, and all their quotes
+    const deletedCatIds = categories.filter((c) => c.folderId === folderId).map((c) => c.id);
+    setCategories((prev) => prev.filter((c) => c.folderId !== folderId));
+    setQuotes((prev) => prev.filter((q) => !deletedCatIds.includes(q.categoryId)));
+
+    // Reset active category if it was deleted
+    if (deletedCatIds.includes(activeCategoryId)) {
+      const remaining = categories.filter((c) => c.folderId !== folderId);
+      if (remaining.length > 0) {
+        setActiveCategoryId(remaining[0].id);
+      } else {
+        setActiveCategoryId("");
+      }
+    }
+  };
+
+  const handleUpdateFolder = (id: string, name: string) => {
+    setFolders((prev) =>
+      prev.map((f) => (f.id === id ? { ...f, name } : f))
+    );
+  };
+
   // Handlers for Categories
-  const handleAddCategory = (name: string) => {
+  const handleAddCategory = (name: string, folderId?: string) => {
     const newCategory: Category = {
       id: `cat-${Date.now()}`,
       name,
+      folderId: folderId || "forex",
       isCustom: true,
       isShufflable: true,
     };
@@ -109,9 +174,9 @@ export default function App() {
     );
   };
 
-  const handleUpdateCategory = (id: string, name: string) => {
+  const handleUpdateCategory = (id: string, name: string, folderId?: string) => {
     setCategories((prev) =>
-      prev.map((cat) => (cat.id === id ? { ...cat, name } : cat))
+      prev.map((cat) => (cat.id === id ? { ...cat, name, folderId: folderId ?? cat.folderId } : cat))
     );
   };
 
@@ -160,25 +225,58 @@ export default function App() {
   const handleImport = (
     importedCategories: Category[],
     importedQuotes: Quote[],
-    mode: "merge" | "overwrite"
+    mode: "merge" | "overwrite",
+    importedFolders?: Folder[]
   ) => {
     if (mode === "overwrite") {
-      setCategories(importedCategories);
+      if (importedFolders && importedFolders.length > 0) {
+        setFolders(importedFolders);
+      } else {
+        setFolders([
+          { id: "forex", name: "FOREX", isCustom: false },
+          { id: "bible", name: "BIBLE", isCustom: false }
+        ]);
+      }
+
+      const mappedCats = importedCategories.map(c => ({
+        ...c,
+        folderId: c.folderId || "forex"
+      }));
+      setCategories(mappedCats);
       setQuotes(importedQuotes);
-      if (importedCategories.length > 0) {
-        setActiveCategoryId(importedCategories[0].id);
+      if (mappedCats.length > 0) {
+        setActiveCategoryId(mappedCats[0].id);
       }
     } else {
       // MERGE MODE
+      if (importedFolders && importedFolders.length > 0) {
+        setFolders((prev) => {
+          const updatedFolders = [...prev];
+          importedFolders.forEach((f) => {
+            const exists = updatedFolders.find(
+              (uf) => uf.id === f.id || uf.name.toLowerCase() === f.name.toLowerCase()
+            );
+            if (!exists) {
+              updatedFolders.push(f);
+            }
+          });
+          return updatedFolders;
+        });
+      }
+
       const updatedCategories = [...categories];
       importedCategories.forEach((importedCat) => {
+        const withFolder = {
+          ...importedCat,
+          folderId: importedCat.folderId || "forex"
+        };
         const exists = updatedCategories.find(
           (c) =>
-            c.id === importedCat.id ||
-            c.name.toLowerCase() === importedCat.name.toLowerCase()
+            c.id === withFolder.id ||
+            c.name.toLowerCase() === withFolder.name.toLowerCase()
         );
         if (!exists) {
-          updatedCategories.push(importedCat);
+          updatedCategories.push(withFolder);
         }
       });
 
@@ -277,10 +375,14 @@ export default function App() {
 
             <div className="flex-1 overflow-hidden" onClick={() => setIsMobileSidebarOpen(false)}>
               <Sidebar
+                folders={folders}
                 categories={categories}
                 quotes={quotes}
                 activeCategoryId={activeCategoryId}
                 setActiveCategoryId={setActiveCategoryId}
+                onAddFolder={handleAddFolder}
+                onDeleteFolder={handleDeleteFolder}
+                onUpdateFolder={handleUpdateFolder}
                 onAddCategory={handleAddCategory}
                 onDeleteCategory={handleDeleteCategory}
                 onToggleShuffle={handleToggleShuffle}
@@ -296,10 +398,14 @@ export default function App() {
       {/* Desktop Sidebar (Visible on large screens) */}
       <div className="hidden md:flex h-full shrink-0">
         <Sidebar
+          folders={folders}
           categories={categories}
           quotes={quotes}
           activeCategoryId={activeCategoryId}
           setActiveCategoryId={setActiveCategoryId}
+          onAddFolder={handleAddFolder}
+          onDeleteFolder={handleDeleteFolder}
+          onUpdateFolder={handleUpdateFolder}
           onAddCategory={handleAddCategory}
           onDeleteCategory={handleDeleteCategory}
           onToggleShuffle={handleToggleShuffle}
@@ -433,6 +539,7 @@ export default function App() {
               onUpdateQuote={handleUpdateQuote}
               onUpdateCategory={handleUpdateCategory}
               onReorderQuotes={handleReorderQuotes}
+              onUpdateAllQuotes={setQuotes}
               onPlayQuote={(id) => {
                 setInitialQuoteId(id);
                 setActiveTab("player");
@@ -452,6 +559,7 @@ export default function App() {
 
       {/* Import / Export JSON Dialog */}
       <ImportExportModal
+        folders={folders}
         categories={categories}
         quotes={quotes}
         isOpen={isImportExportOpen}
