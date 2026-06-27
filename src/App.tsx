@@ -175,6 +175,12 @@ export default function App() {
     );
   };
 
+  const handleToggleFolderShuffle = (folderId: string, enable: boolean) => {
+    setCategories((prev) =>
+      prev.map((cat) => (cat.folderId === folderId ? { ...cat, isShufflable: enable } : cat))
+    );
+  };
+
   const handleUpdateCategory = (id: string, name: string, folderId?: string) => {
     setCategories((prev) =>
       prev.map((cat) => (cat.id === id ? { ...cat, name, folderId: folderId ?? cat.folderId } : cat))
@@ -188,11 +194,17 @@ export default function App() {
     targetCategoryId: string;
   } | null>(null);
 
-  const [moveModalFilter, setMoveModalFilter] = useState<"all" | "unique">("all");
+  const [moveQuoteIds, setMoveQuoteIds] = useState<string[]>([]);
+  const [moveFontSizeLevel, setMoveFontSizeLevel] = useState<number>(5);
+  const [moveModalFilter, setMoveModalFilter] = useState<"all" | "unique" | "new">("all");
+  const [dragActionMode, setDragActionMode] = useState<"move" | "copy">("move");
 
   const handleInitiateMoveQuotes = (quoteIds: string[], sourceCategoryId: string, targetCategoryId: string) => {
     setPendingMove({ quoteIds, sourceCategoryId, targetCategoryId });
+    setMoveQuoteIds(quoteIds);
     setMoveModalFilter("all");
+    setMoveFontSizeLevel(5);
+    setDragActionMode("move");
   };
 
   const handleUpdateCategoryFolder = (categoryId: string, folderId: string) => {
@@ -201,41 +213,108 @@ export default function App() {
     );
   };
 
+  // Helper to check if a quote text already exists and where relative to the move target
+  const checkMoveQuoteExistence = (parsedText: string, currentQuoteId: string) => {
+    const clean = (str: string) => {
+      return str
+        .toLowerCase()
+        .replace(/["'“”‘’]/g, "") // remove quotes
+        .replace(/[\s\p{P}]/gu, "") // remove all whitespace and punctuation
+        .trim();
+    };
+
+    const parsedClean = clean(parsedText);
+    if (!parsedClean) return { status: "new" as const };
+
+    // Check if there is another quote in the target category with the same text
+    const matchInTarget = quotes.find(
+      (existing) =>
+        existing.categoryId === pendingMove?.targetCategoryId &&
+        existing.id !== currentQuoteId &&
+        clean(existing.text) === parsedClean
+    );
+    if (matchInTarget) {
+      return { status: "same_category" as const, matchedQuote: matchInTarget };
+    }
+
+    // Is it in any OTHER category besides source and target?
+    const matchInOther = quotes.find(
+      (existing) =>
+        existing.categoryId !== pendingMove?.targetCategoryId &&
+        existing.categoryId !== pendingMove?.sourceCategoryId &&
+        existing.id !== currentQuoteId &&
+        clean(existing.text) === parsedClean
+    );
+    if (matchInOther) {
+      const otherCat = categories.find((c) => c.id === matchInOther.categoryId);
+      return { status: "other_category" as const, matchedQuote: matchInOther, otherCategoryName: otherCat?.name || "Another Category" };
+    }
+
+    return { status: "new" as const };
+  };
+
+  const getBulkFontSizeClass = (level: number) => {
+    switch (level) {
+      case 1: return "text-sm md:text-base";
+      case 2: return "text-base md:text-lg";
+      case 3: return "text-lg md:text-xl";
+      case 4: return "text-xl md:text-2xl";
+      case 5: return "text-2xl md:text-3xl";
+      case 6: return "text-3xl md:text-4xl";
+      case 7: return "text-4xl md:text-5xl";
+      case 8: return "text-5xl md:text-6xl font-medium";
+      default: return "text-2xl md:text-3xl";
+    }
+  };
+
   // Computed values for Move Quotes modal
   const sourceCategory = pendingMove ? categories.find(c => c.id === pendingMove.sourceCategoryId) : null;
   const targetCategory = pendingMove ? categories.find(c => c.id === pendingMove.targetCategoryId) : null;
-  
-  const cleanCompareText = (str: string) => {
-    return str
-      .toLowerCase()
-      .replace(/["'“”‘’]/g, "")
-      .replace(/[\s\p{P}]/gu, "")
-      .trim();
-  };
-  
-  const targetCategoryQuotes = pendingMove ? quotes.filter(q => q.categoryId === pendingMove.targetCategoryId) : [];
-  const draggedQuotes = pendingMove ? quotes.filter(q => pendingMove.quoteIds.includes(q.id)) : [];
-  
-  const moveDuplicates = draggedQuotes.filter(tq => 
-    targetCategoryQuotes.some(q => cleanCompareText(q.text) === cleanCompareText(tq.text))
-  );
-  
-  const moveUniques = draggedQuotes.filter(tq => 
-    !targetCategoryQuotes.some(q => cleanCompareText(q.text) === cleanCompareText(tq.text))
-  );
 
-  const visibleMovedQuotes = 
-    moveModalFilter === "unique" ? moveUniques : draggedQuotes;
+  const draggedQuotes = pendingMove ? quotes.filter(q => pendingMove.quoteIds.includes(q.id)) : [];
+  const activeMoveQuotes = pendingMove ? quotes.filter(q => moveQuoteIds.includes(q.id)) : [];
+
+  const moveDuplicates = activeMoveQuotes.filter(q => {
+    const status = checkMoveQuoteExistence(q.text, q.id).status;
+    return status === "same_category";
+  });
+
+  const moveUniques = activeMoveQuotes.filter(q => {
+    const status = checkMoveQuoteExistence(q.text, q.id).status;
+    return status !== "same_category";
+  });
+
+  const moveNews = activeMoveQuotes.filter(q => {
+    const status = checkMoveQuoteExistence(q.text, q.id).status;
+    return status === "new";
+  });
+
+  const visibleMovedQuotes =
+    moveModalFilter === "unique" ? moveUniques :
+    moveModalFilter === "new" ? moveNews :
+    activeMoveQuotes;
 
   const handleExecuteMove = (onlyMoveUnique: boolean) => {
     if (!pendingMove) return;
     const { targetCategoryId } = pendingMove;
-    const quotesToMove = onlyMoveUnique ? moveUniques : draggedQuotes;
-    const idsToMove = quotesToMove.map(q => q.id);
+    const quotesToProcess = onlyMoveUnique ? moveUniques : activeMoveQuotes;
 
-    setQuotes(prev =>
-      prev.map(q => (idsToMove.includes(q.id) ? { ...q, categoryId: targetCategoryId } : q))
-    );
+    if (dragActionMode === "copy") {
+      const newQuotes: Quote[] = quotesToProcess.map((q, idx) => ({
+        id: `quote-${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 6)}`,
+        text: q.text,
+        author: q.author,
+        categoryId: targetCategoryId,
+        createdAt: Date.now() - idx * 1000,
+        rating: q.rating,
+      }));
+      setQuotes(prev => [...newQuotes, ...prev]);
+    } else {
+      const idsToMove = quotesToProcess.map(q => q.id);
+      setQuotes(prev =>
+        prev.map(q => (idsToMove.includes(q.id) ? { ...q, categoryId: targetCategoryId } : q))
+      );
+    }
     setPendingMove(null);
   };
 
@@ -450,6 +529,7 @@ export default function App() {
                 onDisableFavoritesOnly={() => setShuffleFavoritesOnly(false)}
                 onUpdateCategoryFolder={handleUpdateCategoryFolder}
                 onMoveQuotes={handleInitiateMoveQuotes}
+                onToggleFolderShuffle={handleToggleFolderShuffle}
               />
             </div>
           </div>
@@ -475,6 +555,7 @@ export default function App() {
           onDisableFavoritesOnly={() => setShuffleFavoritesOnly(false)}
           onUpdateCategoryFolder={handleUpdateCategoryFolder}
           onMoveQuotes={handleInitiateMoveQuotes}
+          onToggleFolderShuffle={handleToggleFolderShuffle}
         />
       </div>
 
@@ -639,66 +720,105 @@ export default function App() {
         onPlaySearchResults={handlePlaySearchResults}
       />
 
-      {/* Bulk Move Quotes Confirmation Dialog */}
+      {/* Bulk Move/Copy Quotes Confirmation Dialog */}
       <AnimatePresence>
-        {pendingMove && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-900/65 backdrop-blur-[2px]">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="bg-white border border-stone-200 shadow-2xl rounded-3xl w-full max-w-xl flex flex-col max-h-[85vh] relative z-10"
-            >
-              {/* Header */}
-              <div className="flex items-center justify-between border-b border-stone-150 px-6 py-4 shrink-0">
-                <div className="flex items-center gap-2">
-                  <Sparkles className="w-5 h-5 text-amber-600" />
-                  <h3 className="font-serif text-lg font-bold text-stone-900">
-                    Confirm Move Quotes
-                  </h3>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setPendingMove(null)}
-                  className="text-stone-400 hover:text-stone-600 transition-colors p-1.5 rounded-lg hover:bg-stone-50 cursor-pointer"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-
-              {/* Content Body */}
-              <div className="flex-1 overflow-y-auto p-6 flex flex-col gap-4">
-                {/* Visual Route Info */}
-                <div className="flex items-center justify-between bg-stone-50 border border-stone-200 p-4 rounded-2xl shadow-3xs">
-                  <div className="flex-1 min-w-0">
-                    <span className="text-[10px] uppercase font-bold text-stone-400 block tracking-wider">Source Category</span>
-                    <strong className="text-xs md:text-sm font-serif text-stone-800 truncate block mt-0.5">"{sourceCategory?.name}"</strong>
+        {pendingMove && (() => {
+          const actionVerb = dragActionMode === "copy" ? "Copy" : "Move";
+          return (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-900/65 backdrop-blur-[2px]">
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.95 }}
+                className="bg-white border border-stone-200 shadow-2xl rounded-3xl w-full max-w-xl flex flex-col max-h-[85vh] relative z-10"
+              >
+                {/* Header */}
+                <div className="flex items-center justify-between border-b border-stone-150 px-6 py-4 shrink-0">
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="w-5 h-5 text-amber-600" />
+                    <h3 className="font-serif text-lg font-bold text-stone-900">
+                      Bulk {actionVerb} Quotes to "{targetCategory?.name}"
+                    </h3>
                   </div>
-                  <div className="px-3 shrink-0 flex items-center justify-center text-amber-600">
-                    <ArrowRight className="w-5 h-5" />
-                  </div>
-                  <div className="flex-1 min-w-0 text-right">
-                    <span className="text-[10px] uppercase font-bold text-stone-400 block tracking-wider">Target Category</span>
-                    <strong className="text-xs md:text-sm font-serif text-amber-900 truncate block mt-0.5">"{targetCategory?.name}"</strong>
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setPendingMove(null)}
+                    className="text-stone-400 hover:text-stone-600 transition-colors p-1.5 rounded-lg hover:bg-stone-50 cursor-pointer"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
                 </div>
 
-                {/* Duplicates Warning Panel */}
-                {moveDuplicates.length > 0 && (
-                  <div className="bg-amber-50 border border-amber-200/60 p-4 rounded-2xl flex items-start gap-3 shadow-3xs">
-                    <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
-                    <div className="text-xs text-amber-850 leading-relaxed">
-                      <p className="font-bold">Duplicate Quotes Detected</p>
-                      <p className="mt-1">
-                        We found <strong className="font-bold">{moveDuplicates.length} quote{moveDuplicates.length > 1 ? "s" : ""}</strong> that already exist{moveDuplicates.length === 1 ? "s" : ""} in the target category <strong>"{targetCategory?.name}"</strong>.
-                      </p>
+                {/* Content Body */}
+                <div className="flex-1 overflow-y-auto p-6 flex flex-col gap-4">
+                  {/* Action Mode Selection */}
+                  <div className="flex flex-wrap items-center justify-between gap-3 bg-stone-50 border border-stone-200 p-3.5 rounded-2xl">
+                    <span className="text-xs font-semibold text-stone-600 uppercase tracking-wider">
+                      Action Mode
+                    </span>
+                    <div className="flex bg-stone-100 p-1 rounded-xl border border-stone-200 shadow-3xs">
+                      <button
+                        type="button"
+                        onClick={() => setDragActionMode("move")}
+                        className={`px-3 py-1.5 rounded-lg font-sans text-xs font-bold transition-all cursor-pointer ${
+                          dragActionMode === "move"
+                            ? "bg-stone-850 text-white shadow-3xs"
+                            : "text-stone-500 hover:text-stone-750"
+                        }`}
+                      >
+                        Move (Cut & Paste)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setDragActionMode("copy")}
+                        className={`px-3 py-1.5 rounded-lg font-sans text-xs font-bold transition-all cursor-pointer ${
+                          dragActionMode === "copy"
+                            ? "bg-amber-600 text-white shadow-3xs"
+                            : "text-stone-500 hover:text-stone-750"
+                        }`}
+                      >
+                        Copy (Duplicate)
+                      </button>
                     </div>
                   </div>
-                )}
 
-                {/* Filter Row */}
-                <div className="flex items-center justify-between gap-3 px-1 mt-1 shrink-0">
-                  <div className="flex items-center gap-1.5">
+                  {/* Top Row: Preview title, A+/A- controls */}
+                  <div className="flex flex-wrap items-center justify-between gap-3 bg-stone-50 border border-stone-200 p-3.5 rounded-2xl">
+                    <div className="flex items-center gap-3">
+                      <span className="text-xs font-semibold text-stone-600 uppercase tracking-wider">
+                        Preview ({activeMoveQuotes.length} quotes)
+                      </span>
+                      {/* Font Size Modifier Controls for Move Preview */}
+                      <div className="flex items-center gap-1 border border-stone-200 bg-white px-2 py-0.5 rounded-xl text-stone-600 font-sans text-xs shadow-3xs shrink-0">
+                        <span className="font-semibold text-stone-500 mr-1 select-none text-[10px]">Size:</span>
+                        <button
+                          type="button"
+                          onClick={() => setMoveFontSizeLevel(prev => Math.max(1, prev - 1))}
+                          disabled={moveFontSizeLevel === 1}
+                          className="w-5 h-5 flex items-center justify-center rounded-lg hover:bg-stone-100 disabled:opacity-40 font-bold transition-colors cursor-pointer text-stone-700 text-xs"
+                          title="Decrease preview font size"
+                        >
+                          A-
+                        </button>
+                        <span className="w-4 text-center font-bold text-amber-700 select-none text-xs">{moveFontSizeLevel}</span>
+                        <button
+                          type="button"
+                          onClick={() => setMoveFontSizeLevel(prev => Math.min(8, prev + 1))}
+                          disabled={moveFontSizeLevel === 8}
+                          className="w-5 h-5 flex items-center justify-center rounded-lg hover:bg-stone-100 disabled:opacity-40 font-bold transition-colors cursor-pointer text-stone-700 text-xs"
+                          title="Increase preview font size"
+                        >
+                          A+
+                        </button>
+                      </div>
+                    </div>
+                    <div className="text-[10px] font-bold text-stone-500 uppercase tracking-wider bg-stone-100 border border-stone-250 px-2.5 py-1 rounded-lg">
+                      Source: "{sourceCategory?.name}"
+                    </div>
+                  </div>
+
+                  {/* View Filter selection row */}
+                  <div className="flex items-center gap-1.5 flex-wrap px-1">
                     <span className="text-stone-500 font-sans text-xs font-semibold select-none mr-1.5">View Filter:</span>
                     <button
                       type="button"
@@ -709,105 +829,153 @@ export default function App() {
                           : "bg-white border-stone-200 text-stone-600 hover:bg-stone-50"
                       }`}
                     >
-                      All ({draggedQuotes.length})
+                      All ({activeMoveQuotes.length})
                     </button>
-                    {moveDuplicates.length > 0 && (
-                      <button
-                        type="button"
-                        onClick={() => setMoveModalFilter("unique")}
-                        className={`px-3 py-1 rounded-lg font-sans text-xs font-bold border transition-all cursor-pointer ${
-                          moveModalFilter === "unique"
-                            ? "bg-amber-600 border-amber-700 text-white shadow-3xs"
-                            : "bg-white border-stone-200 text-stone-600 hover:bg-stone-50"
-                        }`}
-                        title="Only shows quotes that don't already exist in target category"
-                      >
-                        Unique Only ({moveUniques.length})
-                      </button>
+                    <button
+                      type="button"
+                      onClick={() => setMoveModalFilter("unique")}
+                      className={`px-3 py-1 rounded-lg font-sans text-xs font-bold border transition-all cursor-pointer ${
+                        moveModalFilter === "unique"
+                          ? "bg-amber-600 border-amber-700 text-white shadow-3xs"
+                          : "bg-white border-stone-200 text-stone-600 hover:bg-stone-50"
+                      }`}
+                      title="Excludes duplicates in this category"
+                    >
+                      Unique / Importable ({moveUniques.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setMoveModalFilter("new")}
+                      className={`px-3 py-1 rounded-lg font-sans text-xs font-bold border transition-all cursor-pointer ${
+                        moveModalFilter === "new"
+                          ? "bg-emerald-600 border-emerald-700 text-white shadow-3xs"
+                          : "bg-white border-stone-200 text-stone-600 hover:bg-stone-50"
+                      }`}
+                      title="Only shows brand-new quotes not in any category"
+                    >
+                      New Only ({moveNews.length})
+                    </button>
+                  </div>
+
+                  {/* Scrollable list of quotes to move */}
+                  <div className="border border-stone-200 rounded-2xl max-h-[350px] overflow-y-auto divide-y divide-stone-150 bg-stone-50/50 shadow-2xs">
+                    {visibleMovedQuotes.length === 0 ? (
+                      <div className="p-10 text-center text-stone-500 font-sans text-sm">
+                        <p className="font-serif italic font-medium text-stone-700 mb-1">
+                          No quotes match the selected filter.
+                        </p>
+                        <p className="text-xs text-stone-400">
+                          Try choosing "All" or keep some quotes in the list.
+                        </p>
+                      </div>
+                    ) : (
+                      visibleMovedQuotes.map((q) => {
+                        const existStatus = checkMoveQuoteExistence(q.text, q.id);
+                        return (
+                          <div key={q.id} className="p-5 flex items-start justify-between gap-5 hover:bg-white transition-colors">
+                            <div className="flex-1 min-w-0">
+                              <p className={`font-serif text-stone-850 leading-relaxed italic font-medium ${getBulkFontSizeClass(moveFontSizeLevel)}`}>
+                                "{q.text}"
+                              </p>
+                              <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5 mt-2">
+                                <span className="text-[11px] md:text-xs font-bold text-stone-500 uppercase tracking-widest shrink-0">
+                                  — {q.author}
+                                </span>
+                                {existStatus.status === "same_category" && (
+                                  <span className="inline-flex items-center text-[9px] font-bold text-blue-700 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded-md select-none font-sans uppercase tracking-wider">
+                                    In Category: {targetCategory?.name}
+                                  </span>
+                                )}
+                                {existStatus.status === "other_category" && (
+                                  <span className="inline-flex items-center text-[9px] font-bold text-blue-700 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded-md select-none font-sans uppercase tracking-wider" title={`Found in category: ${existStatus.otherCategoryName}`}>
+                                    In Category: {existStatus.otherCategoryName}
+                                  </span>
+                                )}
+                                {existStatus.status === "new" && (
+                                  <span className="inline-flex items-center text-[9px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md select-none font-sans uppercase tracking-wider">
+                                    New
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setMoveQuoteIds(prev => prev.filter(id => id !== q.id));
+                              }}
+                              className="text-stone-400 hover:text-red-600 p-1 rounded-lg transition-colors cursor-pointer shrink-0 mt-1"
+                              title="Exclude this quote from action"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        );
+                      })
                     )}
                   </div>
                 </div>
 
-                {/* Scrollable list of quotes to move */}
-                <div className="border border-stone-200 rounded-2xl max-h-[250px] overflow-y-auto divide-y divide-stone-150 bg-stone-50/50 shadow-2xs">
-                  {visibleMovedQuotes.length === 0 ? (
-                    <div className="p-10 text-center text-stone-500 font-sans text-sm">
-                      <p className="font-serif italic font-medium text-stone-700 mb-1">
-                        No quotes match the selected filter.
-                      </p>
-                    </div>
-                  ) : (
-                    visibleMovedQuotes.map((q) => {
-                      const isDuplicate = moveDuplicates.some(dup => dup.id === q.id);
-                      return (
-                        <div key={q.id} className="p-4 flex items-start justify-between gap-4 hover:bg-white transition-colors">
-                          <div className="flex-1 min-w-0">
-                            <p className="font-serif text-stone-850 text-xs italic leading-relaxed font-medium">
-                              "{q.text}"
-                            </p>
-                            <div className="flex items-center gap-2 mt-1.5">
-                              <span className="text-[10px] font-bold text-stone-500 uppercase tracking-widest shrink-0">
-                                — {q.author}
-                              </span>
-                              {isDuplicate ? (
-                                <span className="inline-flex items-center text-[9px] font-bold text-white bg-red-600 border border-red-750 px-2 py-0.5 rounded-md select-none font-sans uppercase tracking-wider shadow-3xs">
-                                  Already in "{targetCategory?.name}"
-                                </span>
-                              ) : (
-                                <span className="inline-flex items-center text-[9px] font-bold text-emerald-750 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md select-none font-sans uppercase tracking-wider">
-                                  Unique
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
-              </div>
+                {/* Footer */}
+                <div className="border-t border-stone-150 px-6 py-4 flex gap-3 justify-end bg-stone-50 rounded-b-3xl shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setPendingMove(null)}
+                    className="px-4 py-2 border border-stone-250 bg-white text-stone-600 font-sans text-xs font-semibold rounded-xl cursor-pointer hover:bg-stone-50 transition-colors shadow-2xs"
+                  >
+                    Cancel
+                  </button>
 
-              {/* Footer */}
-              <div className="border-t border-stone-150 px-6 py-4 flex gap-3 justify-end bg-stone-50 rounded-b-3xl shrink-0">
-                <button
-                  type="button"
-                  onClick={() => setPendingMove(null)}
-                  className="px-4 py-2 border border-stone-250 bg-white text-stone-600 font-sans text-xs font-semibold rounded-xl cursor-pointer hover:bg-stone-50 transition-colors shadow-2xs"
-                >
-                  Cancel
-                </button>
-
-                {moveDuplicates.length > 0 ? (
-                  <>
+                  {moveModalFilter === "unique" ? (
                     <button
                       type="button"
                       onClick={() => handleExecuteMove(true)}
                       disabled={moveUniques.length === 0}
                       className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white font-sans text-xs font-bold rounded-xl cursor-pointer transition-all shadow-xs disabled:opacity-45 disabled:cursor-not-allowed"
                     >
-                      Move {moveUniques.length} Unique
+                      {actionVerb} {moveUniques.length} Unique Quotes
                     </button>
+                  ) : moveModalFilter === "new" ? (
                     <button
                       type="button"
                       onClick={() => handleExecuteMove(false)}
-                      className="px-4 py-2 bg-stone-900 hover:bg-stone-850 text-white font-sans text-xs font-bold rounded-xl cursor-pointer transition-all shadow-xs"
+                      disabled={moveNews.length === 0}
+                      className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white font-sans text-xs font-bold rounded-xl cursor-pointer transition-all shadow-xs disabled:opacity-45 disabled:cursor-not-allowed"
                     >
-                      Move All anyway ({draggedQuotes.length})
+                      {actionVerb} {moveNews.length} New Quotes
                     </button>
-                  </>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => handleExecuteMove(false)}
-                    className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white font-sans text-xs font-bold rounded-xl cursor-pointer transition-all shadow-xs"
-                  >
-                    Confirm Move ({draggedQuotes.length})
-                  </button>
-                )}
-              </div>
-            </motion.div>
-          </div>
-        )}
+                  ) : moveDuplicates.length > 0 ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => handleExecuteMove(true)}
+                        disabled={moveUniques.length === 0}
+                        className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white font-sans text-xs font-bold rounded-xl cursor-pointer transition-all shadow-xs disabled:opacity-45 disabled:cursor-not-allowed"
+                      >
+                        {actionVerb} {moveUniques.length} Unique Quotes
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleExecuteMove(false)}
+                        className="px-4 py-2 bg-stone-900 hover:bg-stone-850 text-white font-sans text-xs font-bold rounded-xl cursor-pointer transition-all shadow-xs"
+                      >
+                        {actionVerb} All anyway ({activeMoveQuotes.length})
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => handleExecuteMove(false)}
+                      disabled={activeMoveQuotes.length === 0}
+                      className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white font-sans text-xs font-bold rounded-xl cursor-pointer transition-all shadow-xs disabled:opacity-45 disabled:cursor-not-allowed"
+                    >
+                      Confirm {actionVerb} ({activeMoveQuotes.length})
+                    </button>
+                  )}
+                </div>
+              </motion.div>
+            </div>
+          );
+        })()}
       </AnimatePresence>
     </div>
   );

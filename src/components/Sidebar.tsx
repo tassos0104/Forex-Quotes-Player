@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { Category, Quote, Folder } from "../types";
-import { BookOpen, Plus, Trash2, Check, X, Sparkles, ThumbsUp, Folder as FolderIcon, FolderOpen, ChevronDown, ChevronRight, FolderPlus, Pencil } from "lucide-react";
+import { BookOpen, Plus, Trash2, Check, X, Sparkles, ThumbsUp, Folder as FolderIcon, FolderOpen, ChevronDown, ChevronRight, FolderPlus, Pencil, CheckSquare, Square, MinusSquare } from "lucide-react";
 
 interface SidebarProps {
   folders: Folder[];
@@ -19,6 +19,7 @@ interface SidebarProps {
   onDisableFavoritesOnly?: () => void;
   onUpdateCategoryFolder?: (categoryId: string, folderId: string) => void;
   onMoveQuotes?: (quoteIds: string[], sourceCategoryId: string, targetCategoryId: string) => void;
+  onToggleFolderShuffle?: (folderId: string, enable: boolean) => void;
 }
 
 export default function Sidebar({
@@ -38,6 +39,7 @@ export default function Sidebar({
   onDisableFavoritesOnly,
   onUpdateCategoryFolder,
   onMoveQuotes,
+  onToggleFolderShuffle,
 }: SidebarProps) {
   const [newFolderName, setNewFolderName] = useState("");
   const [showAddFolderInput, setShowAddFolderInput] = useState(false);
@@ -420,6 +422,44 @@ export default function Sidebar({
                         <button className="text-stone-400 hover:text-stone-600 transition-colors">
                           {isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
                         </button>
+
+                        {/* Folder Select/Deselect All Switch */}
+                        {folderCategories.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              const enabledCats = folderCategories.filter((c) => c.isShufflable).length;
+                              const isAllEnabled = enabledCats === folderCategories.length;
+                              if (onToggleFolderShuffle) {
+                                onToggleFolderShuffle(folder.id, !isAllEnabled);
+                              }
+                            }}
+                            title={
+                              folderCategories.filter((c) => c.isShufflable).length === folderCategories.length
+                                ? "Deselect all subjects in folder"
+                                : "Select all subjects in folder"
+                            }
+                            className={`w-7 h-4 rounded-full flex items-center p-0.5 transition-colors duration-300 shrink-0 cursor-pointer ${
+                              folderCategories.filter((c) => c.isShufflable).length === folderCategories.length
+                                ? "bg-amber-600"
+                                : folderCategories.filter((c) => c.isShufflable).length > 0
+                                ? "bg-amber-600/50"
+                                : "bg-stone-300"
+                            }`}
+                          >
+                            <div
+                              className={`bg-white w-3 h-3 rounded-full shadow-xs transform transition-transform duration-300 ${
+                                folderCategories.filter((c) => c.isShufflable).length === folderCategories.length
+                                  ? "translate-x-3"
+                                  : folderCategories.filter((c) => c.isShufflable).length > 0
+                                  ? "translate-x-1.5"
+                                  : "translate-x-0"
+                              }`}
+                            />
+                          </button>
+                        )}
+
                         {isExpanded ? (
                           <FolderOpen className="w-4 h-4 text-amber-600 shrink-0" />
                         ) : (
@@ -654,62 +694,7 @@ export default function Sidebar({
         )}
       </div>
 
-      {/* Add Category Form at bottom */}
-      {!shuffleFavoritesOnly && (
-        <div className="p-4 border-t border-stone-200 bg-stone-100/50 shrink-0">
-          <form onSubmit={handleAddSubmit} className="flex flex-col gap-2">
-            <label htmlFor="new-cat-input" className="text-xs font-semibold text-stone-500">
-              Create Custom Category
-            </label>
-            <div className="flex items-center gap-1.5">
-              <input
-                id="new-cat-input"
-                type="text"
-                placeholder="e.g. Life, Science"
-                value={newCatName}
-                onChange={(e) => {
-                  setNewCatName(e.target.value);
-                  if (error) setError("");
-                }}
-                className="flex-1 text-sm bg-white border border-stone-300 rounded-lg px-3 py-1.5 text-stone-850 placeholder-stone-400 focus:outline-none focus:border-amber-600 focus:ring-1 focus:ring-amber-600 transition-all"
-                maxLength={20}
-              />
-              <button
-                id="add-cat-submit"
-                type="submit"
-                className="p-2 bg-stone-900 hover:bg-amber-700 text-white rounded-lg transition-colors duration-200 cursor-pointer"
-                title="Add Category"
-              >
-                <Plus className="w-4 h-4" />
-              </button>
-            </div>
 
-            <div className="flex flex-col gap-1 mt-1">
-              <label htmlFor="target-folder-select" className="text-[10px] font-semibold text-stone-400 uppercase tracking-wider">
-                Select Parent Folder
-              </label>
-              <select
-                id="target-folder-select"
-                value={selectedFolderIdForNewCategory}
-                onChange={(e) => setSelectedFolderIdForNewCategory(e.target.value)}
-                className="text-xs bg-white border border-stone-300 rounded-lg px-2 py-1.5 text-stone-700 focus:outline-none focus:border-amber-600 focus:ring-1 focus:ring-amber-600 transition-all"
-              >
-                {folders.map((f) => (
-                  <option key={f.id} value={f.id}>
-                    {f.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {error && (
-              <p id="cat-form-error" className="text-xs text-red-500 font-sans mt-0.5">
-                {error}
-              </p>
-            )}
-          </form>
-        </div>
-      )}
 
       {/* Category Deletion Confirmation Modal */}
       {categoryToDelete && (

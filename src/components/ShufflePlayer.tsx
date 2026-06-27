@@ -150,9 +150,13 @@ export default function ShufflePlayer({
 
   const shufflableCategories = categories.filter((c) => c.isShufflable);
   const selectedCategoriesCount = shufflableCategories.length;
-  const isSequentialDisabled = selectedCategoriesCount !== 1;
+  const isSequentialDisabled = selectedCategoriesCount < 1;
+
+  const isAlternatingFoldersDisabled = selectedCategoriesCount < 2;
 
   // States
+  const [categoryIndexMap, setCategoryIndexMap] = useState<Record<string, number>>({});
+  const [alternatingFolders, setAlternatingFolders] = useState<boolean>(false);
   const [currentQuoteIndex, setCurrentQuoteIndex] = useState<number>(-1);
   const [history, setHistory] = useState<number[]>([]); // array of indexes in the shufflePool
   const [historyPos, setHistoryPos] = useState<number>(-1); // current position in history array
@@ -839,6 +843,18 @@ export default function ShufflePlayer({
 
   const autoplayTimerRef = useRef<NodeJS.Timeout | null>(null);
 
+  // Disable alternating folders if there are not enough folders selected
+  useEffect(() => {
+    if (isAlternatingFoldersDisabled && alternatingFolders) {
+      setAlternatingFolders(false);
+    }
+  }, [isAlternatingFoldersDisabled, alternatingFolders]);
+
+  // Compute a serialized representation of the shuffle pool IDs to detect subject/folder selection changes
+  const poolIdsStr = useMemo(() => {
+    return shufflePool.map((q) => q.id).join(",");
+  }, [shufflePool]);
+
   // Automatically fallback to shuffle mode if sequential play mode is active but becomes disabled
   useEffect(() => {
     if (isSequentialDisabled && playMode === "sequential") {
@@ -846,21 +862,33 @@ export default function ShufflePlayer({
     }
   }, [isSequentialDisabled, playMode]);
 
-  // Handle general initialization & fallback
+  // Handle general initialization, fallback, and folder/subject selection change resets
   useEffect(() => {
     if (shufflePool.length === 0) {
       setCurrentQuoteIndex(-1);
       setHistory([]);
       setHistoryPos(-1);
       setIsPlaying(false);
-    } else if (currentQuoteIndex === -1) {
-      // Pick starting quote based on play mode
+    } else {
+      // Start the slideshow again when selection changes or is initialized
       const startIndex = playMode === "sequential" ? 0 : Math.floor(Math.random() * shufflePool.length);
       setCurrentQuoteIndex(startIndex);
       setHistory([startIndex]);
       setHistoryPos(0);
+
+      // Initialize categoryIndexMap for this starting category
+      if (playMode === "sequential") {
+        const startingQuote = shufflePool[startIndex];
+        if (startingQuote) {
+          const catQuotes = shufflePool.filter((q) => q.categoryId === startingQuote.categoryId);
+          const relIdx = catQuotes.findIndex((q) => q.id === startingQuote.id);
+          setCategoryIndexMap({
+            [startingQuote.categoryId]: relIdx + 1
+          });
+        }
+      }
     }
-  }, [shufflePool, playMode]);
+  }, [poolIdsStr, playMode]);
 
   // Handle specific quote preview (Zen mode override)
   useEffect(() => {
@@ -904,46 +932,12 @@ export default function ShufflePlayer({
     };
   }, [isPlaying, currentQuoteIndex, speed, shufflePool.length, timerTrigger]);
 
-  // Keyboard Shortcuts Listener for Zen Mode
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (!isZenMode || shufflePool.length === 0) return;
+  const getQuoteFolderId = useCallback((quote: Quote) => {
+    const category = categories.find((c) => c.id === quote.categoryId);
+    return category?.folderId || "unknown";
+  }, [categories]);
 
-      switch (e.key) {
-        case "ArrowRight":
-          e.preventDefault();
-          if (!initialQuoteId) {
-            handleNext();
-          }
-          break;
-        case "ArrowLeft":
-          e.preventDefault();
-          if (!initialQuoteId) {
-            handlePrev();
-          }
-          break;
-        case " ": // Space
-          e.preventDefault();
-          if (!initialQuoteId) {
-            setIsPlaying((prev) => !prev);
-          }
-          break;
-        case "Escape":
-          e.preventDefault();
-          handleExitZenMode();
-          break;
-        default:
-          break;
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [isZenMode, currentQuoteIndex, historyPos, history, shufflePool.length]);
-
-  const handleNext = () => {
+  const handleNext = useCallback(() => {
     if (shufflePool.length === 0) return;
 
     // Stop speaking if active
@@ -961,14 +955,76 @@ export default function ShufflePlayer({
       setCurrentQuoteIndex(history[nextPos]);
     } else {
       let newIndex = 0;
-      if (playMode === "sequential") {
+      if (alternatingFolders) {
+        // Get folder ID of current quote
+        const currentQuote = currentQuoteIndex !== -1 ? shufflePool[currentQuoteIndex] : null;
+        const currentFolderId = currentQuote ? getQuoteFolderId(currentQuote) : null;
+        const currentCategoryId = currentQuote ? currentQuote.categoryId : null;
+
+        // Get all unique folder IDs represented in the shuffle pool
+        const activeFolders: string[] = Array.from(new Set(shufflePool.map((q) => getQuoteFolderId(q))));
+        let targetFolderId = currentFolderId;
+        let targetCategoryId: string | null = null;
+
+        if (activeFolders.length > 1) {
+          // Choose a folder different from the current one
+          const otherFolders = activeFolders.filter((fid) => fid !== currentFolderId);
+          targetFolderId = otherFolders[Math.floor(Math.random() * otherFolders.length)];
+        }
+
+        // Within targetFolderId, get all categories (subjects) that have quotes in the pool
+        const folderCategoriesInPool: string[] = Array.from(
+          new Set(
+            shufflePool
+              .filter((q) => getQuoteFolderId(q) === targetFolderId)
+              .map((q) => q.categoryId)
+          )
+        );
+
+        if (folderCategoriesInPool.length > 0) {
+          // If we had to stay in the same folder, try to pick a different category (subject)
+          if (targetFolderId === currentFolderId && folderCategoriesInPool.length > 1) {
+            const otherCats = folderCategoriesInPool.filter((cid) => cid !== currentCategoryId);
+            targetCategoryId = otherCats[Math.floor(Math.random() * otherCats.length)];
+          } else {
+            targetCategoryId = folderCategoriesInPool[Math.floor(Math.random() * folderCategoriesInPool.length)];
+          }
+        }
+
+        if (targetCategoryId) {
+          // Now pick the quote from the target category
+          const catQuotes = shufflePool.filter((q) => q.categoryId === targetCategoryId);
+          if (playMode === "sequential") {
+            const currentIdxInCat = categoryIndexMap[targetCategoryId] ?? 0;
+            const nextIdxInCat = currentIdxInCat % catQuotes.length;
+            const targetQuote = catQuotes[nextIdxInCat];
+            newIndex = shufflePool.findIndex((q) => q.id === targetQuote.id);
+
+            setCategoryIndexMap((prev) => ({
+              ...prev,
+              [targetCategoryId!]: currentIdxInCat + 1,
+            }));
+          } else {
+            // Shuffle mode
+            const targetQuote = catQuotes[Math.floor(Math.random() * catQuotes.length)];
+            newIndex = shufflePool.findIndex((q) => q.id === targetQuote.id);
+          }
+        } else {
+          // Fallback if targetCategoryId couldn't be resolved
+          newIndex = playMode === "sequential"
+            ? (currentQuoteIndex + 1) % shufflePool.length
+            : Math.floor(Math.random() * shufflePool.length);
+        }
+      } else if (playMode === "sequential") {
         newIndex = (currentQuoteIndex + 1) % shufflePool.length;
       } else {
         // Pick a new random index. Prefer different from current if pool size > 1
         newIndex = Math.floor(Math.random() * shufflePool.length);
         if (shufflePool.length > 1) {
-          while (newIndex === currentQuoteIndex) {
+          let limit = 0;
+          while (newIndex === currentQuoteIndex && limit < 10) {
             newIndex = Math.floor(Math.random() * shufflePool.length);
+            limit++;
           }
         }
       }
@@ -982,9 +1038,20 @@ export default function ShufflePlayer({
       setHistoryPos(updatedHistory.length - 1);
       setCurrentQuoteIndex(newIndex);
     }
-  };
+  }, [
+    shufflePool,
+    isZenMode,
+    historyPos,
+    history,
+    playMode,
+    currentQuoteIndex,
+    alternatingFolders,
+    getQuoteFolderId,
+    categoryIndexMap,
+    setCategoryIndexMap,
+  ]);
 
-  const handlePrev = () => {
+  const handlePrev = useCallback(() => {
     if (shufflePool.length === 0) return;
 
     // Stop speaking
@@ -1008,7 +1075,53 @@ export default function ShufflePlayer({
     if (!isZenMode) {
       setIsPlaying(false);
     }
-  };
+  }, [shufflePool, isZenMode, historyPos, history]);
+
+  // Keyboard Shortcuts Listener for Shuffle Player (Zen Mode & Normal Mode)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (shufflePool.length === 0) return;
+
+      // Ignore shortcuts when user is typing in any input, textarea, or editable element
+      const target = e.target as HTMLElement;
+      if (
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+
+      switch (e.key) {
+        case "ArrowRight":
+          e.preventDefault();
+          handleNext();
+          break;
+        case "ArrowLeft":
+          e.preventDefault();
+          handlePrev();
+          break;
+        case " ": // Space
+          e.preventDefault();
+          setIsPlaying((prev) => !prev);
+          break;
+        case "Escape":
+          if (isZenMode) {
+            e.preventDefault();
+            handleExitZenMode();
+          }
+          break;
+        default:
+          break;
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [shufflePool.length, handleNext, handlePrev, isZenMode, handleExitZenMode]);
 
   const handleZoneClick = (action: "prev" | "next") => {
     const now = Date.now();
@@ -1187,6 +1300,28 @@ export default function ShufflePlayer({
             <span>Thumbs Up Only</span>
           </button>
 
+          {/* Alternating Folders Toggle */}
+          <button
+            id="toggle-alternating-folders-btn"
+            disabled={isAlternatingFoldersDisabled}
+            onClick={() => setAlternatingFolders(!alternatingFolders)}
+            className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold transition-all border ${
+              isAlternatingFoldersDisabled
+                ? "bg-stone-50 border-stone-150 text-stone-350 cursor-not-allowed opacity-50"
+                : alternatingFolders
+                ? "bg-amber-50 border-amber-300 text-amber-900 shadow-2xs cursor-pointer"
+                : "bg-white border-stone-200 text-stone-600 hover:bg-stone-50 cursor-pointer"
+            }`}
+            title={
+              isAlternatingFoldersDisabled
+                ? "Select at least 2 subjects to enable alternating folders mode"
+                : "Alternates next slides between different selected folders"
+            }
+          >
+            <Sparkles className={`w-3.5 h-3.5 ${alternatingFolders ? "text-amber-600 fill-amber-100" : ""}`} />
+            <span>Alternating Folders</span>
+          </button>
+
           {/* Play Order Selector (Shuffle vs In Order) */}
           <div className="flex bg-stone-200/50 p-0.5 rounded-lg border border-stone-200 text-xs font-semibold select-none">
             <button
@@ -1238,10 +1373,7 @@ export default function ShufflePlayer({
               {isSequentialDisabled && (
                 <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-56 p-2.5 bg-stone-900 text-white text-[11px] rounded-xl shadow-lg opacity-0 pointer-events-none group-hover/tooltip:opacity-100 transition-opacity duration-200 z-50 text-center leading-normal">
                   <span className="font-semibold block mb-0.5 text-amber-400">Sequential play unavailable</span>
-                  {selectedCategoriesCount === 0 
-                    ? "Please select (toggle on) a category on the left to enable sequential play."
-                    : "You can only play 'In Order' when a single category is selected on the left."
-                  }
+                  Please select (toggle on) at least one subject on the left to enable sequential play.
                   <div className="absolute top-full left-1/2 -translate-x-1/2 -mt-1 border-4 border-transparent border-t-stone-900" />
                 </div>
               )}
