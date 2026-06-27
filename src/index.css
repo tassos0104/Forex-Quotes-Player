@@ -6,6 +6,10 @@
   --font-serif: "Playfair Display", Georgia, serif;
 }
 
+.font-quote {
+  font-family: var(--quote-font, "Playfair Display", Georgia, serif);
+}
+
 /* Custom scrollbars for a cleaner UI */
 ::-webkit-scrollbar {
   width: 6px;

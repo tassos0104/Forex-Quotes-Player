@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { Quote, Category } from "../types";
 import { Search, X, Play, Tag, HelpCircle, ArrowRight } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
-import { renderFormattedText, stripFormatTags } from "../utils/textFormatter";
+import { renderFormattedText, stripFormatTags, isGreekText } from "../utils/textFormatter";
 
 interface SearchModalProps {
   isOpen: boolean;
@@ -270,7 +270,10 @@ export default function SearchModal({
                       key={quote.id}
                       className="p-5 hover:bg-stone-50/50 transition-colors flex flex-col gap-2.5"
                     >
-                      <blockquote className="font-serif text-sm leading-relaxed text-stone-850">
+                      <blockquote
+                        className="font-quote text-sm leading-relaxed text-stone-850"
+                        style={{ "--quote-font": isGreekText(quote.text) ? "var(--quote-font-el)" : "var(--quote-font-en)" } as React.CSSProperties}
+                      >
                         "{renderFormattedText(quote.text)}"
                       </blockquote>
                       <div className="flex flex-wrap items-center justify-between gap-2 text-xs">

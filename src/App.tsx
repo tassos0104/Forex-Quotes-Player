@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Category, Quote, Folder } from "./types";
+import { Category, Quote, Folder, QUOTE_FONTS } from "./types";
 import { DEFAULT_CATEGORIES, DEFAULT_QUOTES } from "./defaultData";
 import Sidebar from "./components/Sidebar";
 import ShufflePlayer from "./components/ShufflePlayer";
@@ -8,6 +8,7 @@ import AdminPanel from "./components/AdminPanel";
 import ImportExportModal from "./components/ImportExportModal";
 import { Menu, X, Shuffle, BookOpen, Sparkles, BookMarked, FileJson, ShieldAlert, Search, ArrowRight, AlertTriangle } from "lucide-react";
 import SearchModal from "./components/SearchModal";
+import SelectionFormattingToolbar from "./components/SelectionFormattingToolbar";
 import { motion, AnimatePresence } from "motion/react";
 
 export default function App() {
@@ -72,6 +73,87 @@ export default function App() {
   const [activeSearchPlayList, setActiveSearchPlayList] = useState<Quote[] | null>(null);
   const [activeSearchQuery, setActiveSearchQuery] = useState("");
   const [initialQuoteId, setInitialQuoteId] = useState<string | null>(null);
+
+  const [selectedFontId, setSelectedFontId] = useState<string>(() => {
+    return localStorage.getItem("quote_shuffle_font_id") || "playfair-display";
+  });
+
+  const [selectedGreekFontId, setSelectedGreekFontId] = useState<string>(() => {
+    return localStorage.getItem("quote_shuffle_greek_font_id") || "gfs-didot";
+  });
+
+  const [previewEn, setPreviewEn] = useState<string>(() => {
+    return localStorage.getItem("quote_shuffle_preview_en") || "True wisdom comes to each of us when we realize how little we understand about life, ourselves, and the world around us.";
+  });
+
+  const [previewEl, setPreviewEl] = useState<string>(() => {
+    return localStorage.getItem("quote_shuffle_preview_el") || "Η αληθινή σοφία έρχεται στον καθένα μας όταν συνειδητοποιήσουμε πόσο λίγο κατανοούμε τη ζωή, τον εαυτό μας και τον κόσμο γύρω μας.";
+  });
+
+  const handleUpdateQuoteText = (id: string, newText: string) => {
+    if (id === "preview-en") {
+      setPreviewEn(newText);
+      localStorage.setItem("quote_shuffle_preview_en", newText);
+    } else if (id === "preview-el") {
+      setPreviewEl(newText);
+      localStorage.setItem("quote_shuffle_preview_el", newText);
+    } else {
+      setQuotes((prevQuotes) => {
+        const updated = prevQuotes.map((q) => (q.id === id ? { ...q, text: newText } : q));
+        try {
+          localStorage.setItem("quote_shuffle_quotes", JSON.stringify(updated));
+        } catch (e) {
+          console.warn("Could not save quotes to localStorage:", e);
+        }
+        return updated;
+      });
+    }
+  };
+
+  // Load selected Google font dynamically and save choice
+  useEffect(() => {
+    try {
+      localStorage.setItem("quote_shuffle_font_id", selectedFontId);
+    } catch (e) {
+      console.warn("Could not save font setting to localStorage:", e);
+    }
+
+    const selectedFont = QUOTE_FONTS.find((f) => f.id === selectedFontId);
+    if (selectedFont) {
+      const fontLinkId = `google-font-${selectedFont.id}`;
+      if (!document.getElementById(fontLinkId)) {
+        const link = document.createElement("link");
+        link.id = fontLinkId;
+        link.rel = "stylesheet";
+        const encodedFamily = encodeURIComponent(selectedFont.family);
+        link.href = `https://fonts.googleapis.com/css2?family=${encodedFamily}&display=swap`;
+        document.head.appendChild(link);
+      }
+    }
+  }, [selectedFontId]);
+
+  // Load selected Greek Google font dynamically and save choice
+  useEffect(() => {
+    try {
+      localStorage.setItem("quote_shuffle_greek_font_id", selectedGreekFontId);
+    } catch (e) {
+      console.warn("Could not save Greek font setting to localStorage:", e);
+    }
+
+    const selectedFont = QUOTE_FONTS.find((f) => f.id === selectedGreekFontId);
+    if (selectedFont) {
+      const fontLinkId = `google-font-${selectedFont.id}`;
+      if (!document.getElementById(fontLinkId)) {
+        const link = document.createElement("link");
+        link.id = fontLinkId;
+        link.rel = "stylesheet";
+        const encodedFamily = encodeURIComponent(selectedFont.family);
+        link.href = `https://fonts.googleapis.com/css2?family=${encodedFamily}&display=swap`;
+        document.head.appendChild(link);
+      }
+    }
+  }, [selectedGreekFontId]);
+
 
   // Persist state updates to LocalStorage
   useEffect(() => {
@@ -461,9 +543,19 @@ export default function App() {
   // Derived properties
   const activeCategory = categories.find((c) => c.id === activeCategoryId);
   const filteredQuotes = quotes.filter((q) => q.categoryId === activeCategoryId);
+  const activeFont = QUOTE_FONTS.find((f) => f.id === selectedFontId) || QUOTE_FONTS[0];
+  const activeGreekFont = QUOTE_FONTS.find((f) => f.id === selectedGreekFontId) || QUOTE_FONTS[0];
 
   return (
-    <div id="quote-app-root" className="flex flex-col md:flex-row h-screen w-screen bg-stone-50/50 text-stone-800 font-sans overflow-hidden">
+    <div
+      id="quote-app-root"
+      className="flex flex-col md:flex-row h-screen w-screen bg-stone-50/50 text-stone-800 font-sans overflow-hidden"
+      style={{ 
+        "--quote-font-en": activeFont.cssValue,
+        "--quote-font-el": activeGreekFont.cssValue,
+        "--quote-font": activeFont.cssValue 
+      } as React.CSSProperties}
+    >
       {/* Mobile Header Banner */}
       <div className="md:hidden bg-stone-900 text-white p-4 flex items-center justify-between border-b border-stone-800 shrink-0">
         <div className="flex items-center gap-2">
@@ -670,6 +762,12 @@ export default function App() {
                 setShuffleFavoritesOnly(true);
                 setActiveTab("player");
               }}
+              selectedFontId={selectedFontId}
+              onSelectFontId={setSelectedFontId}
+              selectedGreekFontId={selectedGreekFontId}
+              onSelectGreekFontId={setSelectedGreekFontId}
+              previewEn={previewEn}
+              previewEl={previewEl}
             />
           ) : activeCategory ? (
             <QuoteManager
@@ -977,6 +1075,12 @@ export default function App() {
           );
         })()}
       </AnimatePresence>
+      <SelectionFormattingToolbar
+        quotes={quotes}
+        previewEn={previewEn}
+        previewEl={previewEl}
+        onUpdateQuoteText={handleUpdateQuoteText}
+      />
     </div>
   );
 }

@@ -32,7 +32,7 @@ import {
   Highlighter,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
-import { renderFormattedText, stripFormatTags } from "../utils/textFormatter";
+import { renderFormattedText, stripFormatTags, isGreekText } from "../utils/textFormatter";
 
 // Contrast check utility for custom hex backgrounds using YIQ formula
 const getContrastColor = (hexColor: string): "light" | "dark" => {
@@ -1577,7 +1577,9 @@ export default function ShufflePlayer({
               <div className="relative z-10 my-auto flex flex-col justify-center">
                 <blockquote
                   id="quote-text-serif"
-                  className="font-serif text-xl md:text-3xl lg:text-4xl text-stone-800 font-medium leading-relaxed md:leading-normal"
+                  data-quote-id={activeQuote.id}
+                  className="font-quote text-xl md:text-3xl lg:text-4xl text-stone-800 font-medium leading-relaxed md:leading-normal select-text cursor-text selection:bg-amber-200/80"
+                  style={{ "--quote-font": isGreekText(activeQuote.text) ? "var(--quote-font-el)" : "var(--quote-font-en)" } as React.CSSProperties}
                 >
                   "{renderFormattedText(activeQuote.text)}"
                 </blockquote>
@@ -2196,7 +2198,8 @@ export default function ShufflePlayer({
                 >
                   <blockquote
                     id="zen-quote-text"
-                    className="font-serif text-2xl md:text-5xl lg:text-6xl font-medium leading-relaxed tracking-tight"
+                    className="font-quote text-2xl md:text-5xl lg:text-6xl font-medium leading-relaxed tracking-tight"
+                    style={{ "--quote-font": isGreekText(activeQuote.text) ? "var(--quote-font-el)" : "var(--quote-font-en)" } as React.CSSProperties}
                   >
                     "{renderFormattedText(activeQuote.text)}"
                   </blockquote>

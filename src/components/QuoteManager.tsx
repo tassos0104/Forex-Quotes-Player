@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { Quote, Category } from "../types";
 import { Plus, Trash2, Calendar, Sparkles, ThumbsUp, ThumbsDown, Pencil, Check, X, Type, Underline, Highlighter, Eraser, Bold, Italic, Play, Eye, EyeOff, GripVertical } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
-import { renderFormattedText, stripFormatTags } from "../utils/textFormatter";
+import { renderFormattedText, stripFormatTags, isGreekText } from "../utils/textFormatter";
 
 interface QuoteManagerProps {
   category: Category;
@@ -61,6 +61,7 @@ export default function QuoteManager({
   const [draggedQuoteId, setDraggedQuoteId] = useState<string | null>(null);
   const [dragOverQuoteId, setDragOverQuoteId] = useState<string | null>(null);
   const [dropPosition, setDropPosition] = useState<'above' | 'below' | null>(null);
+  const [draggableQuoteId, setDraggableQuoteId] = useState<string | null>(null);
 
   // Context Menu state for right-click text formatting
   const [contextMenu, setContextMenu] = useState<{
@@ -154,6 +155,13 @@ export default function QuoteManager({
       setShowBulkDeleteConfirm(false);
     }
   }, [selectedQuoteIds.length]);
+
+  // Cancel editing mode if quotes are selected
+  useEffect(() => {
+    if (selectedQuoteIds.length > 0 && editingQuoteId !== null) {
+      setEditingQuoteId(null);
+    }
+  }, [selectedQuoteIds.length, editingQuoteId]);
 
   // Close context menu on click anywhere
   useEffect(() => {
@@ -1302,13 +1310,13 @@ export default function QuoteManager({
                     exit={{ opacity: 0, scale: 0.95 }}
                     transition={{ duration: 0.2 }}
                     id={`quote-row-${q.id}`}
-                    draggable={editingQuoteId !== q.id && quoteFilter === "all"}
+                    draggable={draggableQuoteId === q.id && editingQuoteId !== q.id && quoteFilter === "all"}
                     onDragStart={(e) => handleDragStart(e, q.id)}
                     onDragOver={(e) => handleDragOver(e, q.id)}
                     onDragEnd={handleDragEnd}
                     onDrop={(e) => handleDrop(e, q.id)}
                     onClick={(e) => handleQuoteClick(e, q.id)}
-                    className={`relative group border rounded-xl p-4 md:p-5 flex flex-col gap-3.5 transition-all select-none ${
+                    className={`relative group border rounded-xl p-4 md:p-5 flex flex-col gap-3.5 transition-all ${
                       selectedQuoteIds.includes(q.id)
                         ? "border-amber-500 bg-amber-50/20 shadow-xs"
                         : q.isActive === false
@@ -1418,7 +1426,13 @@ export default function QuoteManager({
                             />
 
                             {quoteFilter === "all" && (
-                              <div className="flex items-center text-stone-300 group-hover:text-stone-400 transition-colors cursor-grab active:cursor-grabbing shrink-0" title="Drag to reorder">
+                              <div
+                                onMouseDown={() => setDraggableQuoteId(q.id)}
+                                onMouseUp={() => setDraggableQuoteId(null)}
+                                onMouseLeave={() => setDraggableQuoteId(null)}
+                                className="flex items-center text-stone-300 group-hover:text-stone-400 transition-colors cursor-grab active:cursor-grabbing shrink-0 select-none"
+                                title="Drag to reorder"
+                              >
                                 <GripVertical className="w-4 h-4" />
                               </div>
                             )}
@@ -1436,7 +1450,9 @@ export default function QuoteManager({
                           </div>
 
                           {/* Right action buttons: Full row by themselves */}
-                          <div className="flex items-center gap-1 shrink-0">
+                          <div className={`flex items-center gap-1 shrink-0 transition-all ${
+                            selectedQuoteIds.length > 0 ? "pointer-events-none opacity-40 select-none" : ""
+                          }`}>
                             {deleteConfirmQuoteId === q.id ? (
                               <div className="flex items-center gap-1.5 bg-red-50 border border-red-200 p-1 rounded-lg shrink-0 animate-fade-in shadow-3xs">
                                 <span className="text-[10px] font-bold text-red-700 uppercase font-sans px-1.5">
@@ -1564,7 +1580,23 @@ export default function QuoteManager({
 
                         {/* Verse Text underneath (Full Width) */}
                         <div className="w-full mt-1">
-                          <p className={`font-serif text-stone-800 font-medium leading-relaxed ${getFontSizeClass(fontSizeLevel)} ${q.isActive === false ? "text-stone-500 line-through decoration-stone-300" : ""}`}>
+                          <p
+                            data-quote-id={q.id}
+                            onClick={(e) => {
+                              // Stop propagation so clicking text does not trigger row selection,
+                              // unless we are in selection mode where we want click to bubble to select the row
+                              if (selectedQuoteIds.length > 0) {
+                                return;
+                              }
+                              e.stopPropagation();
+                            }}
+                            className={`font-quote text-stone-800 font-medium leading-relaxed ${
+                              selectedQuoteIds.length > 0
+                                ? "select-none pointer-events-none cursor-default"
+                                : "select-text cursor-text selection:bg-amber-200/80"
+                            } ${getFontSizeClass(fontSizeLevel)} ${q.isActive === false ? "text-stone-500 line-through decoration-stone-300" : ""}`}
+                            style={{ "--quote-font": isGreekText(q.text) ? "var(--quote-font-el)" : "var(--quote-font-en)" } as React.CSSProperties}
+                          >
                             "{renderFormattedText(q.text)}"
                           </p>
                           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-3.5 pt-2 border-t border-stone-100/50">
@@ -1885,7 +1917,10 @@ export default function QuoteManager({
                         return (
                           <div key={idx} className="p-5 flex items-start justify-between gap-5 hover:bg-white transition-colors">
                             <div className="flex-1 min-w-0">
-                              <p className={`font-serif text-stone-850 leading-relaxed italic font-medium ${getBulkFontSizeClass(bulkFontSizeLevel)}`}>
+                              <p
+                                className={`font-quote text-stone-850 leading-relaxed italic font-medium ${getBulkFontSizeClass(bulkFontSizeLevel)}`}
+                                style={{ "--quote-font": isGreekText(q.text) ? "var(--quote-font-el)" : "var(--quote-font-en)" } as React.CSSProperties}
+                              >
                                 "{q.text}"
                               </p>
                               <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5 mt-2">
