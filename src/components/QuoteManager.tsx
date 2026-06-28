@@ -73,6 +73,14 @@ export default function QuoteManager({
     targetId: string;
   } | null>(null);
 
+  // Custom right-click context menu state for selected quotes
+  const [rowContextMenu, setRowContextMenu] = useState<{
+    x: number;
+    y: number;
+    visible: boolean;
+    quoteIds: string[];
+  } | null>(null);
+
   // Multi-selection states
   const [selectedQuoteIds, setSelectedQuoteIds] = useState<string[]>([]);
   const [lastSelectedId, setLastSelectedId] = useState<string | null>(null);
@@ -111,8 +119,8 @@ export default function QuoteManager({
     }
   };
 
-  // Active filter for displaying category quotes ('all', 'hidden', 'thumbs-up', 'thumbs-down')
-  const [quoteFilter, setQuoteFilter] = useState<"all" | "hidden" | "thumbs-up" | "thumbs-down">("all");
+  // Active filter for displaying category quotes ('all', 'hidden', 'thumbs-up', 'thumbs-down', 'formatted')
+  const [quoteFilter, setQuoteFilter] = useState<"all" | "hidden" | "thumbs-up" | "thumbs-down" | "formatted">("all");
 
   // Active filter for bulk preview ('all', 'unique', 'new')
   const [bulkPreviewFilter, setBulkPreviewFilter] = useState<"all" | "unique" | "new">("all");
@@ -163,16 +171,19 @@ export default function QuoteManager({
     }
   }, [selectedQuoteIds.length, editingQuoteId]);
 
-  // Close context menu on click anywhere
+  // Close context menus on click anywhere
   useEffect(() => {
     const handleGlobalClick = () => {
       if (contextMenu?.visible) {
         setContextMenu(null);
       }
+      if (rowContextMenu?.visible) {
+        setRowContextMenu(null);
+      }
     };
     window.addEventListener("click", handleGlobalClick);
     return () => window.removeEventListener("click", handleGlobalClick);
-  }, [contextMenu]);
+  }, [contextMenu, rowContextMenu]);
 
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const scrollIntervalRef = useRef<number | null>(null);
@@ -819,6 +830,125 @@ export default function QuoteManager({
     setShowBulkDeleteConfirm(true);
   };
 
+  const handleBulkThumbsUp = () => {
+    if (selectedQuoteIds.length === 0 || !onUpdateAllQuotes) return;
+    setHistory((prev) => [...prev, allQuotes]);
+
+    const updated = allQuotes.map((q) => {
+      if (selectedQuoteIds.includes(q.id)) {
+        return { ...q, rating: 'up' as const };
+      }
+      return q;
+    });
+
+    onUpdateAllQuotes(updated);
+    const count = selectedQuoteIds.length;
+
+    setToastMessage({
+      text: `Set ${count} quote${count > 1 ? "s" : ""} to Thumbs Up.`,
+      actionText: "Undo",
+      onAction: () => {
+        setHistory((prev) => {
+          const prevState = prev[prev.length - 1];
+          if (prevState && onUpdateAllQuotes) {
+            onUpdateAllQuotes(prevState);
+          }
+          return prev.slice(0, -1);
+        });
+      },
+    });
+  };
+
+  const handleBulkThumbsDown = () => {
+    if (selectedQuoteIds.length === 0 || !onUpdateAllQuotes) return;
+    setHistory((prev) => [...prev, allQuotes]);
+
+    const updated = allQuotes.map((q) => {
+      if (selectedQuoteIds.includes(q.id)) {
+        return { ...q, rating: 'down' as const };
+      }
+      return q;
+    });
+
+    onUpdateAllQuotes(updated);
+    const count = selectedQuoteIds.length;
+
+    setToastMessage({
+      text: `Set ${count} quote${count > 1 ? "s" : ""} to Thumbs Down.`,
+      actionText: "Undo",
+      onAction: () => {
+        setHistory((prev) => {
+          const prevState = prev[prev.length - 1];
+          if (prevState && onUpdateAllQuotes) {
+            onUpdateAllQuotes(prevState);
+          }
+          return prev.slice(0, -1);
+        });
+      },
+    });
+  };
+
+  const handleBulkClearFormatting = () => {
+    if (selectedQuoteIds.length === 0 || !onUpdateAllQuotes) return;
+    setHistory((prev) => [...prev, allQuotes]);
+
+    const updated = allQuotes.map((q) => {
+      if (selectedQuoteIds.includes(q.id)) {
+        return { ...q, text: stripFormatTags(q.text) };
+      }
+      return q;
+    });
+
+    onUpdateAllQuotes(updated);
+    const count = selectedQuoteIds.length;
+
+    setToastMessage({
+      text: `Cleared formatting for ${count} quote${count > 1 ? "s" : ""}.`,
+      actionText: "Undo",
+      onAction: () => {
+        setHistory((prev) => {
+          const prevState = prev[prev.length - 1];
+          if (prevState && onUpdateAllQuotes) {
+            onUpdateAllQuotes(prevState);
+          }
+          return prev.slice(0, -1);
+        });
+      },
+    });
+  };
+
+  const handleRowContextMenu = (e: React.MouseEvent, quoteId: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    // Determine target selection
+    let targetQuoteIds = [...selectedQuoteIds];
+    if (!selectedQuoteIds.includes(quoteId)) {
+      setSelectedQuoteIds([quoteId]);
+      targetQuoteIds = [quoteId];
+    }
+
+    // Keep within viewport bounds
+    const menuWidth = 200;
+    const menuHeight = 280;
+    let x = e.clientX;
+    let y = e.clientY;
+
+    if (x + menuWidth > window.innerWidth) {
+      x = window.innerWidth - menuWidth - 10;
+    }
+    if (y + menuHeight > window.innerHeight) {
+      y = window.innerHeight - menuHeight - 10;
+    }
+
+    setRowContextMenu({
+      x,
+      y,
+      visible: true,
+      quoteIds: targetQuoteIds,
+    });
+  };
+
   const handleToggleActive = (id: string, currentActive: boolean) => {
     if (!onUpdateAllQuotes) return;
     setHistory((prev) => [...prev, allQuotes]);
@@ -854,6 +984,7 @@ export default function QuoteManager({
     if (quoteFilter === "hidden") return q.isActive === false;
     if (quoteFilter === "thumbs-up") return q.rating === "up";
     if (quoteFilter === "thumbs-down") return q.rating === "down";
+    if (quoteFilter === "formatted") return stripFormatTags(q.text) !== q.text;
     return true;
   });
 
@@ -1141,23 +1272,30 @@ export default function QuoteManager({
                 </div>
 
                 {sortedQuotes.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const filteredIds = filteredQuotes.map(q => q.id);
-                      const allFilteredSelected = filteredIds.length > 0 && filteredIds.every(id => selectedQuoteIds.includes(id));
-                      if (allFilteredSelected) {
-                        setSelectedQuoteIds(prev => prev.filter(id => !filteredIds.includes(id)));
-                      } else {
-                        setSelectedQuoteIds(prev => [...new Set([...prev, ...filteredIds])]);
-                      }
-                    }}
-                    className="px-2.5 py-1 text-xs border border-stone-250 bg-white hover:bg-stone-50 text-stone-600 rounded-lg transition-colors cursor-pointer font-sans font-semibold shrink-0"
-                  >
-                    {filteredQuotes.length > 0 && filteredQuotes.every(q => selectedQuoteIds.includes(q.id))
-                      ? (quoteFilter === "all" ? "Deselect All" : "Deselect Filtered")
-                      : (quoteFilter === "all" ? "Select All" : "Select Filtered")}
-                  </button>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const filteredIds = filteredQuotes.map(q => q.id);
+                        const allFilteredSelected = filteredIds.length > 0 && filteredIds.every(id => selectedQuoteIds.includes(id));
+                        if (allFilteredSelected) {
+                          setSelectedQuoteIds(prev => prev.filter(id => !filteredIds.includes(id)));
+                        } else {
+                          setSelectedQuoteIds(prev => [...new Set([...prev, ...filteredIds])]);
+                        }
+                      }}
+                      className="px-2.5 py-1 text-xs border border-stone-250 bg-white hover:bg-stone-50 text-stone-600 rounded-lg transition-colors cursor-pointer font-sans font-semibold shrink-0"
+                    >
+                      {filteredQuotes.length > 0 && filteredQuotes.every(q => selectedQuoteIds.includes(q.id))
+                        ? (quoteFilter === "all" ? "Deselect All" : "Deselect Filtered")
+                        : (quoteFilter === "all" ? "Select All" : "Select Filtered")}
+                    </button>
+                    {selectedQuoteIds.length > 0 && (
+                      <span className="text-[11px] font-bold text-amber-850 bg-amber-50 border border-amber-200/60 px-2 py-1 rounded-lg font-sans whitespace-nowrap animate-fade-in shadow-3xs">
+                        {selectedQuoteIds.length} selected (right-click for actions)
+                      </span>
+                    )}
+                  </div>
                 )}
                 
                 <button
@@ -1220,78 +1358,22 @@ export default function QuoteManager({
                 <EyeOff className="w-3 h-3" />
                 Hidden ({quotes.filter(q => q.isActive === false).length})
               </button>
+              <button
+                type="button"
+                onClick={() => setQuoteFilter("formatted")}
+                className={`px-2.5 py-1 text-xs rounded-lg font-sans font-semibold transition-all cursor-pointer flex items-center gap-1 ${
+                  quoteFilter === "formatted"
+                    ? "bg-purple-700 text-white shadow-3xs"
+                    : "text-stone-650 bg-stone-50 hover:bg-stone-100 border border-stone-200/50"
+                }`}
+              >
+                <Highlighter className="w-3 h-3 text-purple-250" />
+                Formatted ({quotes.filter(q => stripFormatTags(q.text) !== q.text).length})
+              </button>
             </div>
           </div>
 
-          {/* Bulk Selection Actions Bar */}
-          <AnimatePresence>
-            {selectedQuoteIds.length > 0 && (
-              <motion.div
-                initial={{ opacity: 0, height: 0, y: -10 }}
-                animate={{ opacity: 1, height: "auto", y: 0 }}
-                exit={{ opacity: 0, height: 0, y: -10 }}
-                className="flex flex-wrap items-center justify-between gap-3 bg-amber-50 border border-amber-250/60 p-3 rounded-2xl shadow-3xs overflow-hidden w-full"
-              >
-                {showBulkDeleteConfirm ? (
-                  <div className="flex flex-wrap items-center justify-between gap-3 w-full p-0.5">
-                    <span className="text-xs font-bold text-red-750 font-sans flex items-center gap-1.5">
-                      ⚠️ Delete {selectedQuoteIds.length} selected quote{selectedQuoteIds.length > 1 ? "s" : ""}? This cannot be undone.
-                    </span>
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      <button
-                        type="button"
-                        onClick={executeBulkDelete}
-                        className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-bold rounded-xl transition-colors cursor-pointer shadow-xs"
-                      >
-                        Yes, Delete
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setShowBulkDeleteConfirm(false)}
-                        className="px-3 py-1.5 bg-white border border-stone-250 hover:bg-stone-50 text-stone-700 text-xs font-semibold rounded-xl transition-colors cursor-pointer shadow-2xs"
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <>
-                    <span className="text-xs font-semibold text-stone-800 font-sans">
-                      {selectedQuoteIds.length} of {sortedQuotes.length} selected
-                    </span>
-                    <div className="flex items-center gap-2 shrink-0">
-                      <button
-                        type="button"
-                        onClick={handleBulkActivate}
-                        className="flex items-center gap-1 px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl transition-colors cursor-pointer shadow-xs"
-                        title="Enable selected quotes in slideshow"
-                      >
-                        <Eye className="w-3 h-3" />
-                        <span>Activate</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleBulkDeactivate}
-                        className="flex items-center gap-1 px-2.5 py-1.5 bg-stone-600 hover:bg-stone-700 text-white text-xs font-bold rounded-xl transition-colors cursor-pointer shadow-xs"
-                        title="Hide selected quotes from slideshow without deleting"
-                      >
-                        <EyeOff className="w-3 h-3" />
-                        <span>Deactivate</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleBulkDelete}
-                        className="flex items-center gap-1 px-2.5 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-bold rounded-xl transition-colors cursor-pointer shadow-xs"
-                      >
-                        <Trash2 className="w-3 h-3" />
-                        <span>Delete</span>
-                      </button>
-                    </div>
-                  </>
-                )}
-              </motion.div>
-            )}
-          </AnimatePresence>
+
 
           <div
             id="quotes-list-wrapper"
@@ -1316,6 +1398,7 @@ export default function QuoteManager({
                     onDragEnd={handleDragEnd}
                     onDrop={(e) => handleDrop(e, q.id)}
                     onClick={(e) => handleQuoteClick(e, q.id)}
+                    onContextMenu={(e) => handleRowContextMenu(e, q.id)}
                     className={`relative group border rounded-xl p-4 md:p-5 flex flex-col gap-3.5 transition-all ${
                       selectedQuoteIds.includes(q.id)
                         ? "border-amber-500 bg-amber-50/20 shadow-xs"
@@ -1751,6 +1834,120 @@ export default function QuoteManager({
           >
             <Eraser className="w-3.5 h-3.5 text-stone-400" />
             <span>Remove Formatting</span>
+          </button>
+        </div>
+      )}
+
+      {/* Floating Custom Right-Click Context Menu for Selected Quotes */}
+      {rowContextMenu && rowContextMenu.visible && (
+        <div
+          id="row-context-menu"
+          className="fixed z-[100] min-w-[200px] bg-white border border-stone-250 shadow-2xl rounded-2xl p-1.5 flex flex-col gap-0.5 animate-fade-in select-none"
+          style={{
+            top: `${rowContextMenu.y}px`,
+            left: `${rowContextMenu.x}px`,
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="px-3 py-1 text-[10px] font-bold text-stone-400 uppercase tracking-widest border-b border-stone-100 mb-1 flex items-center justify-between">
+            <span>Actions ({rowContextMenu.quoteIds.length})</span>
+          </div>
+
+          <button
+            type="button"
+            id="row-context-deselect-btn"
+            onClick={() => {
+              setSelectedQuoteIds([]);
+              setRowContextMenu(null);
+            }}
+            className="flex items-center gap-2 px-2.5 py-1.5 text-stone-700 hover:bg-stone-50 rounded-xl text-left font-sans text-xs font-semibold cursor-pointer transition-colors"
+          >
+            <X className="w-3.5 h-3.5 text-stone-550" />
+            <span>Deselect All</span>
+          </button>
+
+          <button
+            type="button"
+            id="row-context-clear-formatting-btn"
+            onClick={() => {
+              handleBulkClearFormatting();
+              setRowContextMenu(null);
+            }}
+            className="flex items-center gap-2 px-2.5 py-1.5 text-stone-700 hover:bg-stone-50 rounded-xl text-left font-sans text-xs font-semibold cursor-pointer transition-colors"
+          >
+            <Eraser className="w-3.5 h-3.5 text-amber-600" />
+            <span>Clear Formatting</span>
+          </button>
+
+          <div className="h-px bg-stone-100 my-1" />
+
+          <button
+            type="button"
+            id="row-context-thumbs-up-btn"
+            onClick={() => {
+              handleBulkThumbsUp();
+              setRowContextMenu(null);
+            }}
+            className="flex items-center gap-2 px-2.5 py-1.5 text-emerald-800 hover:bg-emerald-50 rounded-xl text-left font-sans text-xs font-semibold cursor-pointer transition-colors"
+          >
+            <ThumbsUp className="w-3.5 h-3.5 text-emerald-600" />
+            <span>Thumbs Up</span>
+          </button>
+
+          <button
+            type="button"
+            id="row-context-thumbs-down-btn"
+            onClick={() => {
+              handleBulkThumbsDown();
+              setRowContextMenu(null);
+            }}
+            className="flex items-center gap-2 px-2.5 py-1.5 text-red-800 hover:bg-red-50 rounded-xl text-left font-sans text-xs font-semibold cursor-pointer transition-colors"
+          >
+            <ThumbsDown className="w-3.5 h-3.5 text-red-600" />
+            <span>Thumbs Down</span>
+          </button>
+
+          <div className="h-px bg-stone-100 my-1" />
+
+          <button
+            type="button"
+            id="row-context-activate-btn"
+            onClick={() => {
+              handleBulkActivate();
+              setRowContextMenu(null);
+            }}
+            className="flex items-center gap-2 px-2.5 py-1.5 text-stone-750 hover:bg-stone-50 rounded-xl text-left font-sans text-xs font-semibold cursor-pointer transition-colors"
+          >
+            <Eye className="w-3.5 h-3.5 text-amber-600" />
+            <span>Activate</span>
+          </button>
+
+          <button
+            type="button"
+            id="row-context-deactivate-btn"
+            onClick={() => {
+              handleBulkDeactivate();
+              setRowContextMenu(null);
+            }}
+            className="flex items-center gap-2 px-2.5 py-1.5 text-stone-750 hover:bg-stone-50 rounded-xl text-left font-sans text-xs font-semibold cursor-pointer transition-colors"
+          >
+            <EyeOff className="w-3.5 h-3.5 text-stone-500" />
+            <span>Deactivate</span>
+          </button>
+
+          <div className="h-px bg-stone-100 my-1" />
+
+          <button
+            type="button"
+            id="row-context-delete-btn"
+            onClick={() => {
+              executeBulkDelete();
+              setRowContextMenu(null);
+            }}
+            className="flex items-center gap-2 px-2.5 py-1.5 text-red-750 hover:bg-red-50 rounded-xl text-left font-sans text-xs font-bold cursor-pointer transition-colors"
+          >
+            <Trash2 className="w-3.5 h-3.5 text-red-650" />
+            <span>Delete</span>
           </button>
         </div>
       )}

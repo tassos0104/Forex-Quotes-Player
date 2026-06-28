@@ -34,6 +34,7 @@ export default function AdminPanel({
 }: AdminPanelProps) {
   const [adminTab, setAdminTab] = useState<'down' | 'up' | 'fonts'>('down');
   const [activeFontTab, setActiveFontTab] = useState<'en' | 'el'>('en');
+  const [fontSearch, setFontSearch] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedCategoryId, setSelectedCategoryId] = useState("all");
 
@@ -282,6 +283,29 @@ export default function AdminPanel({
                 Greek Fonts (Ελληνικά)
               </button>
             </div>
+            
+            {/* Font Search Field */}
+            <div className="relative">
+              <span className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                <Search className="h-3.5 w-3.5 text-stone-400" />
+              </span>
+              <input
+                type="text"
+                value={fontSearch}
+                onChange={(e) => setFontSearch(e.target.value)}
+                placeholder="Search font by name or category..."
+                className="w-full pl-9 pr-8 py-2 text-xs bg-stone-50 border border-stone-250 rounded-xl focus:outline-none focus:ring-1 focus:ring-amber-600 focus:border-amber-600 transition-all placeholder-stone-400 text-stone-850"
+              />
+              {fontSearch && (
+                <button
+                  type="button"
+                  onClick={() => setFontSearch("")}
+                  className="absolute inset-y-0 right-0 pr-2.5 flex items-center text-stone-450 hover:text-stone-700 font-sans text-xs font-bold cursor-pointer"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
 
             <div className="flex items-center justify-between mb-1">
               <h3 className="text-xs font-bold uppercase tracking-wider text-stone-400 flex items-center gap-1.5">
@@ -289,61 +313,86 @@ export default function AdminPanel({
                   {activeFontTab === 'en' ? "Latin/English Typography" : "Greek-Supported Typography"}
                 </span>
                 <span className="text-[10px] bg-amber-500/10 text-amber-800 font-bold px-2 py-0.5 rounded-full font-mono">
-                  {activeFontTab === 'en' ? QUOTE_FONTS.length : QUOTE_FONTS.filter(f => f.supportsGreek).length} Fonts
+                  {
+                    (() => {
+                      const displayedFonts = QUOTE_FONTS
+                        .filter((font) => activeFontTab === 'en' || font.supportsGreek)
+                        .filter((font) => {
+                          if (!fontSearch) return true;
+                          const query = fontSearch.toLowerCase();
+                          return font.name.toLowerCase().includes(query) || font.category.toLowerCase().includes(query);
+                        });
+                      return displayedFonts.length;
+                    })()
+                  } Fonts
                 </span>
               </h3>
             </div>
 
-            <div className="flex flex-col gap-3 max-h-[600px] overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-stone-200">
-              {QUOTE_FONTS.filter((font) => activeFontTab === 'en' || font.supportsGreek).map((font) => {
-                const isActive = activeFontTab === 'en' 
-                  ? font.id === selectedFontId 
-                  : font.id === selectedGreekFontId;
-                
-                return (
-                  <button
-                    key={font.id}
-                    onClick={() => {
-                      if (activeFontTab === 'en') {
-                        onSelectFontId?.(font.id);
-                      } else {
-                        onSelectGreekFontId?.(font.id);
-                      }
-                    }}
-                    className={`flex flex-col text-left p-4 rounded-2xl border transition-all cursor-pointer w-full shrink-0 ${
-                      isActive
-                        ? "bg-amber-500/5 border-amber-600 ring-2 ring-amber-500/10 shadow-xs"
-                        : "bg-white hover:bg-stone-50 border-stone-200"
-                    }`}
-                  >
-                    <div className="flex items-center justify-between w-full mb-1">
-                      <span className="text-sm font-bold text-stone-850 font-sans">
-                        {font.name}
-                      </span>
-                      {isActive && (
-                        <span className="w-2 h-2 rounded-full bg-amber-600 animate-pulse" />
-                      )}
+            <div className="flex flex-col gap-3 max-h-[550px] overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-stone-200">
+              {(() => {
+                const displayedFonts = [...QUOTE_FONTS]
+                  .filter((font) => activeFontTab === 'en' || font.supportsGreek)
+                  .filter((font) => {
+                    if (!fontSearch) return true;
+                    const query = fontSearch.toLowerCase();
+                    return font.name.toLowerCase().includes(query) || font.category.toLowerCase().includes(query);
+                  })
+                  .sort((a, b) => a.name.localeCompare(b.name));
+
+                if (displayedFonts.length === 0) {
+                  return (
+                    <div className="text-center py-8 text-stone-400 text-xs font-medium">
+                      No matching fonts found.
                     </div>
+                  );
+                }
 
-                    <span className="text-[10px] font-semibold text-stone-400 uppercase tracking-wider mb-4">
-                      {font.category} Style {font.supportsGreek && "• Greek Supported"}
-                    </span>
-
-                    {/* Mini inline preview */}
-                    <div
-                      className="mt-auto border-t border-stone-100 pt-2.5 text-stone-600 w-full"
-                      style={{ fontFamily: font.cssValue }}
+                return displayedFonts.map((font) => {
+                  const isActive = activeFontTab === 'en' 
+                    ? font.id === selectedFontId 
+                    : font.id === selectedGreekFontId;
+                  
+                  return (
+                    <button
+                      key={font.id}
+                      onClick={() => {
+                        if (activeFontTab === 'en') {
+                          onSelectFontId?.(font.id);
+                        } else {
+                          onSelectGreekFontId?.(font.id);
+                        }
+                      }}
+                      className={`flex flex-col text-left p-4 rounded-2xl border transition-all cursor-pointer w-full shrink-0 ${
+                        isActive
+                          ? "bg-amber-500/5 border-amber-600 ring-2 ring-amber-500/10 shadow-xs"
+                          : "bg-white hover:bg-stone-50 border-stone-200"
+                      }`}
                     >
-                      <p className="text-base truncate leading-snug">
-                        {activeFontTab === 'en' ? "Abc 123" : "αβγ 123"}
-                      </p>
-                      <p className="text-xs truncate italic text-stone-400">
-                        {activeFontTab === 'en' ? "The quick brown fox" : "Νους υγιής εν σώματι υγιεί"}
-                      </p>
-                    </div>
-                  </button>
-                );
-              })}
+                      <div className="flex items-center justify-between w-full mb-1">
+                        <span className="text-sm font-bold text-stone-850 font-sans">
+                          {font.name}
+                        </span>
+                        {isActive && (
+                          <span className="w-2 h-2 rounded-full bg-amber-600 animate-pulse" />
+                        )}
+                      </div>
+
+                      <span className="text-[10px] font-semibold text-stone-400 uppercase tracking-wider mb-4">
+                        {font.category} Style {font.supportsGreek && "• Greek Supported"}
+                      </span>
+
+                      {/* Mini inline preview */}
+                      <div
+                        className="mt-auto border-t border-stone-100 pt-2.5 text-stone-600 w-full"
+                        style={{ fontFamily: font.cssValue }}
+                      >
+                        {activeFontTab === 'en' ? previewEn : previewEl}
+                      </div>
+                    </button>
+                  );
+                });
+              })()}
             </div>
           </div>
 

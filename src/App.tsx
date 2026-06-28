@@ -6,7 +6,7 @@ import ShufflePlayer from "./components/ShufflePlayer";
 import QuoteManager from "./components/QuoteManager";
 import AdminPanel from "./components/AdminPanel";
 import ImportExportModal from "./components/ImportExportModal";
-import { Menu, X, Shuffle, BookOpen, Sparkles, BookMarked, FileJson, ShieldAlert, Search, ArrowRight, AlertTriangle } from "lucide-react";
+import { Menu, X, Shuffle, BookOpen, Sparkles, BookMarked, FileJson, ShieldAlert, Search, ArrowRight, AlertTriangle, ChevronLeft, ChevronRight } from "lucide-react";
 import SearchModal from "./components/SearchModal";
 import SelectionFormattingToolbar from "./components/SelectionFormattingToolbar";
 import { motion, AnimatePresence } from "motion/react";
@@ -67,6 +67,23 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<"player" | "manage" | "admin">("player");
   const [shuffleFavoritesOnly, setShuffleFavoritesOnly] = useState(false);
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("quote_shuffle_sidebar_collapsed") === "true";
+    } catch (e) {
+      return false;
+    }
+  });
+
+  const toggleSidebar = () => {
+    setIsSidebarCollapsed((prev) => {
+      const newVal = !prev;
+      try {
+        localStorage.setItem("quote_shuffle_sidebar_collapsed", String(newVal));
+      } catch (e) {}
+      return newVal;
+    });
+  };
 
   // Search and Search-Slideshow Play States
   const [isSearchOpen, setIsSearchOpen] = useState(false);
@@ -629,26 +646,32 @@ export default function App() {
       )}
 
       {/* Desktop Sidebar (Visible on large screens) */}
-      <div className="hidden md:flex h-full shrink-0">
-        <Sidebar
-          folders={folders}
-          categories={categories}
-          quotes={quotes}
-          activeCategoryId={activeCategoryId}
-          setActiveCategoryId={setActiveCategoryId}
-          onAddFolder={handleAddFolder}
-          onDeleteFolder={handleDeleteFolder}
-          onUpdateFolder={handleUpdateFolder}
-          onAddCategory={handleAddCategory}
-          onDeleteCategory={handleDeleteCategory}
-          onToggleShuffle={handleToggleShuffle}
-          onToggleAllShuffle={handleToggleAllShuffle}
-          shuffleFavoritesOnly={activeTab === "player" && shuffleFavoritesOnly}
-          onDisableFavoritesOnly={() => setShuffleFavoritesOnly(false)}
-          onUpdateCategoryFolder={handleUpdateCategoryFolder}
-          onMoveQuotes={handleInitiateMoveQuotes}
-          onToggleFolderShuffle={handleToggleFolderShuffle}
-        />
+      <div 
+        className={`hidden md:flex h-full shrink-0 transition-all duration-300 ease-in-out relative ${
+          isSidebarCollapsed ? "w-0 opacity-0 pointer-events-none" : "w-80 opacity-100"
+        }`}
+      >
+        <div className="w-80 h-full flex flex-col overflow-hidden">
+          <Sidebar
+            folders={folders}
+            categories={categories}
+            quotes={quotes}
+            activeCategoryId={activeCategoryId}
+            setActiveCategoryId={setActiveCategoryId}
+            onAddFolder={handleAddFolder}
+            onDeleteFolder={handleDeleteFolder}
+            onUpdateFolder={handleUpdateFolder}
+            onAddCategory={handleAddCategory}
+            onDeleteCategory={handleDeleteCategory}
+            onToggleShuffle={handleToggleShuffle}
+            onToggleAllShuffle={handleToggleAllShuffle}
+            shuffleFavoritesOnly={activeTab === "player" && shuffleFavoritesOnly}
+            onDisableFavoritesOnly={() => setShuffleFavoritesOnly(false)}
+            onUpdateCategoryFolder={handleUpdateCategoryFolder}
+            onMoveQuotes={handleInitiateMoveQuotes}
+            onToggleFolderShuffle={handleToggleFolderShuffle}
+          />
+        </div>
       </div>
 
       {/* Main Right Panel */}
@@ -657,6 +680,23 @@ export default function App() {
         <div id="master-tabs-bar" className="bg-white border-b border-stone-200 px-6 py-4 flex flex-col sm:flex-row items-center justify-between gap-4 shrink-0">
           {/* Active indicator or title */}
           <div className="flex items-center gap-4">
+            {/* Collapse/Expand Sidebar Toggle (Desktop Only) */}
+            <button
+              id="desktop-sidebar-toggle-btn"
+              onClick={toggleSidebar}
+              className="hidden md:flex items-center justify-center p-2 rounded-xl border border-stone-200 bg-white hover:bg-stone-50 text-stone-600 hover:text-stone-950 transition-all cursor-pointer shadow-2xs hover:border-amber-500 active:scale-95"
+              title={isSidebarCollapsed ? "Show Sidebar" : "Hide Sidebar"}
+            >
+              {isSidebarCollapsed ? (
+                <div className="flex items-center gap-1.5 px-0.5 text-xs font-bold text-amber-600">
+                  <ChevronRight className="w-4 h-4 animate-bounce-horizontal" />
+                  <span>Open Folders</span>
+                </div>
+              ) : (
+                <ChevronLeft className="w-4 h-4 text-stone-500" />
+              )}
+            </button>
+
             <div className="hidden sm:flex items-center gap-2">
               <Sparkles className="w-4 h-4 text-amber-600" />
               <span className="text-xs font-semibold text-stone-400 uppercase tracking-wider">

@@ -22,6 +22,7 @@ import {
   Tv,
   Search,
   X,
+  Trash2,
   Pencil,
   ArrowRight,
   Eraser,
@@ -30,14 +31,15 @@ import {
   Type,
   Underline,
   Highlighter,
+  AlertTriangle,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { renderFormattedText, stripFormatTags, isGreekText } from "../utils/textFormatter";
 
 // Contrast check utility for custom hex backgrounds using YIQ formula
-const getContrastColor = (hexColor: string): "light" | "dark" => {
+const getYIQ = (hexColor: string): number => {
   const hex = hexColor.replace("#", "");
-  if (hex.length !== 6 && hex.length !== 3) return "light";
+  if (hex.length !== 6 && hex.length !== 3) return 255;
   
   let r = 0, g = 0, b = 0;
   if (hex.length === 3) {
@@ -49,9 +51,79 @@ const getContrastColor = (hexColor: string): "light" | "dark" => {
     g = parseInt(hex.substring(2, 4), 16);
     b = parseInt(hex.substring(4, 6), 16);
   }
-  
-  const yiq = ((r * 299) + (g * 587) + (b * 114)) / 1000;
-  return yiq >= 135 ? "dark" : "light"; // slightly adjusted threshold for crisp contrast on pastels
+  return ((r * 299) + (g * 587) + (b * 114)) / 1000;
+};
+
+const parseGradient = (gradientStr: string) => {
+  const hexMatches = gradientStr.match(/#[0-9A-Fa-f]{6}|#[0-9A-Fa-f]{3}/g);
+  let color1 = "#554023";
+  let color2 = "#c99846";
+  let color3: string | undefined = undefined;
+  if (hexMatches) {
+    if (hexMatches.length >= 3) {
+      color1 = hexMatches[0];
+      color2 = hexMatches[1];
+      color3 = hexMatches[2];
+    } else if (hexMatches.length >= 2) {
+      color1 = hexMatches[0];
+      color2 = hexMatches[1];
+    } else if (hexMatches.length === 1) {
+      color1 = hexMatches[0];
+    }
+  }
+
+  let angleDeg = 135; // default
+  const degMatch = gradientStr.match(/(-?\d+)deg/);
+  if (degMatch) {
+    angleDeg = parseInt(degMatch[1], 10);
+  } else if (gradientStr.includes("to top right")) {
+    angleDeg = 45;
+  } else if (gradientStr.includes("to bottom right")) {
+    angleDeg = 135;
+  } else if (gradientStr.includes("to bottom left")) {
+    angleDeg = 225;
+  } else if (gradientStr.includes("to top left")) {
+    angleDeg = 315;
+  } else if (gradientStr.includes("to top")) {
+    angleDeg = 0;
+  } else if (gradientStr.includes("to right")) {
+    angleDeg = 90;
+  } else if (gradientStr.includes("to bottom")) {
+    angleDeg = 180;
+  } else if (gradientStr.includes("to left")) {
+    angleDeg = 270;
+  }
+
+  return { color1, color2, color3, angleDeg };
+};
+
+const getGradientCoords = (angleDeg: number, w: number, h: number) => {
+  const angleRad = (angleDeg * Math.PI) / 180;
+  const dx = Math.sin(angleRad);
+  const dy = -Math.cos(angleRad);
+  const halfL = Math.abs((w / 2) * dx) + Math.abs((h / 2) * dy);
+  const x0 = w / 2 - halfL * dx;
+  const y0 = h / 2 - halfL * dy;
+  const x1 = w / 2 + halfL * dx;
+  const y1 = h / 2 + halfL * dy;
+  return { x0, y0, x1, y1 };
+};
+
+const getContrastColor = (bgColor: string): "light" | "dark" => {
+  if (bgColor.startsWith("linear-gradient")) {
+    const { color1, color2, color3 } = parseGradient(bgColor);
+    const yiq1 = getYIQ(color1);
+    const yiq2 = getYIQ(color2);
+    if (color3) {
+      const yiq3 = getYIQ(color3);
+      const averageYiq = (yiq1 + yiq2 + yiq3) / 3;
+      return averageYiq >= 135 ? "dark" : "light";
+    } else {
+      const averageYiq = (yiq1 + yiq2) / 2;
+      return averageYiq >= 135 ? "dark" : "light";
+    }
+  }
+  return getYIQ(bgColor) >= 135 ? "dark" : "light"; // slightly adjusted threshold for crisp contrast on pastels
 };
 
 // Safe wrapper utility functions for SpeechSynthesis to prevent DOM/Security errors in sandboxed iframes
@@ -179,6 +251,7 @@ export default function ShufflePlayer({
   const [editText, setEditText] = useState<string>("");
   const [editAuthor, setEditAuthor] = useState<string>("");
   const [wasPlayingBeforeEdit, setWasPlayingBeforeEdit] = useState<boolean>(false);
+  const [overwriteTarget, setOverwriteTarget] = useState<{ index: number; newGrad: any } | null>(null);
 
   // Context Menu state for right-click text formatting in edit popup
   const [contextMenu, setContextMenu] = useState<{
@@ -195,10 +268,219 @@ export default function ShufflePlayer({
   const [zenTheme, setZenTheme] = useState<"dark" | "warm">("dark");
   const [showShortcuts, setShowShortcuts] = useState<boolean>(false);
   const [showColorPicker, setShowColorPicker] = useState<boolean>(false);
-  const [zenBgColor, setZenBgColor] = useState<string>("#ffffff");
+  const [zenBgColor, setZenBgColor] = useState<string>(() => {
+    try {
+      return localStorage.getItem("quote_shuffle_zen_bg_color") || "#ffffff";
+    } catch (e) {
+      return "#ffffff";
+    }
+  });
+
+  // Custom Gradient states
+  const [activeColorTab, setActiveColorTab] = useState<"solid" | "gradient">(() => {
+    try {
+      const stored = localStorage.getItem("quote_shuffle_zen_bg_color");
+      if (stored && stored.startsWith("linear-gradient")) {
+        return "gradient";
+      }
+    } catch (e) {}
+    return "solid";
+  });
+  const [gradientColor1, setGradientColor1] = useState<string>(() => {
+    try {
+      const storedColor = localStorage.getItem("quote_shuffle_zen_bg_color");
+      if (storedColor && storedColor.startsWith("linear-gradient")) {
+        const { color1 } = parseGradient(storedColor);
+        return color1;
+      }
+    } catch (e) {}
+    return "#554023";
+  });
+  const [gradientColor2, setGradientColor2] = useState<string>(() => {
+    try {
+      const storedColor = localStorage.getItem("quote_shuffle_zen_bg_color");
+      if (storedColor && storedColor.startsWith("linear-gradient")) {
+        const { color2 } = parseGradient(storedColor);
+        return color2;
+      }
+    } catch (e) {}
+    return "#c99846";
+  });
+  const [gradientColor3, setGradientColor3] = useState<string>(() => {
+    try {
+      const storedColor = localStorage.getItem("quote_shuffle_zen_bg_color");
+      if (storedColor && storedColor.startsWith("linear-gradient")) {
+        const { color3 } = parseGradient(storedColor);
+        return color3 || "#854d0e";
+      }
+    } catch (e) {}
+    return "#854d0e";
+  });
+  const [useColor3, setUseColor3] = useState<boolean>(() => {
+    try {
+      const storedColor = localStorage.getItem("quote_shuffle_zen_bg_color");
+      if (storedColor && storedColor.startsWith("linear-gradient")) {
+        const { color3 } = parseGradient(storedColor);
+        return !!color3;
+      }
+    } catch (e) {}
+    return false;
+  });
+  const [newGradientName, setNewGradientName] = useState<string>(() => {
+    try {
+      const storedColor = localStorage.getItem("quote_shuffle_zen_bg_color");
+      if (storedColor && storedColor.startsWith("linear-gradient")) {
+        const storedGradientsStr = localStorage.getItem("quote_shuffle_saved_gradients");
+        let list = storedGradientsStr ? JSON.parse(storedGradientsStr) : [
+          { name: "Olive Gold", color1: "#554023", color2: "#c99846", angle: 135 },
+          { name: "Twilight Aura", color1: "#1e1b4b", color2: "#4c1d95", angle: 135 },
+          { name: "Deep Forest", color1: "#064e3b", color2: "#15803d", angle: 135 },
+          { name: "Cosmic Nebula", color1: "#311042", color2: "#831843", angle: 135 },
+          { name: "Sunset Horizon", color1: "#fdba74", color2: "#f97316", color3: "#b91c1c", angle: 135 },
+          { name: "Cotton Candy", color1: "#fbcfe8", color2: "#f5d0fe", color3: "#e0f2fe", angle: 135 },
+          { name: "Ocean Breeze", color1: "#1e3a8a", color2: "#0d9488", angle: 135 }
+        ];
+        list = [...list].sort((a, b) => a.name.localeCompare(b.name));
+        const matched = list.find((grad: any) => {
+          const angle = grad.angle !== undefined ? grad.angle : 135;
+          const gradStr = grad.color3
+            ? `linear-gradient(${angle}deg, ${grad.color1}, ${grad.color2}, ${grad.color3})`
+            : `linear-gradient(${angle}deg, ${grad.color1}, ${grad.color2})`;
+          return storedColor.toLowerCase() === gradStr.toLowerCase();
+        });
+        if (matched) return matched.name;
+      }
+    } catch (e) {}
+    return "";
+  });
+  const color1InputRef = useRef<HTMLInputElement>(null);
+  const [savedGradients, setSavedGradients] = useState<{name: string; color1: string; color2: string; color3?: string; angle?: number;}[]>(() => {
+    let list = [
+      { name: "Olive Gold", color1: "#554023", color2: "#c99846", angle: 135 },
+      { name: "Twilight Aura", color1: "#1e1b4b", color2: "#4c1d95", angle: 135 },
+      { name: "Deep Forest", color1: "#064e3b", color2: "#15803d", angle: 135 },
+      { name: "Cosmic Nebula", color1: "#311042", color2: "#831843", angle: 135 },
+      { name: "Sunset Horizon", color1: "#fdba74", color2: "#f97316", color3: "#b91c1c", angle: 135 },
+      { name: "Cotton Candy", color1: "#fbcfe8", color2: "#f5d0fe", color3: "#e0f2fe", angle: 135 },
+      { name: "Ocean Breeze", color1: "#1e3a8a", color2: "#0d9488", angle: 135 }
+    ];
+    try {
+      const stored = localStorage.getItem("quote_shuffle_saved_gradients");
+      if (stored) {
+        list = JSON.parse(stored);
+      }
+    } catch (e) {
+      console.warn("Failed to load saved gradients from localStorage:", e);
+    }
+    return [...list].sort((a, b) => a.name.localeCompare(b.name));
+  });
+
+  const saveGradient = (newGrad: { name: string; color1: string; color2: string; color3?: string; angle: number }, overwriteIndex?: number) => {
+    let updated = [...savedGradients];
+    if (overwriteIndex !== undefined && overwriteIndex !== -1) {
+      updated[overwriteIndex] = newGrad;
+    } else {
+      updated.push(newGrad);
+    }
+
+    // Sort alphabetically by name
+    updated.sort((a, b) => a.name.localeCompare(b.name));
+
+    setSavedGradients(updated);
+    try {
+      localStorage.setItem("quote_shuffle_saved_gradients", JSON.stringify(updated));
+    } catch (err) {
+      console.warn("Failed to save gradients to localStorage:", err);
+    }
+
+    const gradStr = newGrad.color3
+      ? `linear-gradient(${newGrad.angle}deg, ${newGrad.color1}, ${newGrad.color2}, ${newGrad.color3})`
+      : `linear-gradient(${newGrad.angle}deg, ${newGrad.color1}, ${newGrad.color2})`;
+    setZenBgColor(gradStr);
+
+    // Find the new index of the saved gradient in the sorted array
+    const newIdx = updated.findIndex((g) => g.name.toLowerCase() === newGrad.name.toLowerCase());
+    setSelectedGradIndex(newIdx);
+
+    setIsRandomColorsMode(false);
+    setIsRandomGradientsMode(false);
+    setNewGradientName("");
+
+    setTimeout(() => {
+      if (color1InputRef.current) {
+        color1InputRef.current.focus();
+        color1InputRef.current.select();
+      }
+    }, 50);
+  };
+
+  useEffect(() => {
+    if (!overwriteTarget) return;
+
+    const handleModalKeys = (e: KeyboardEvent) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        saveGradient(overwriteTarget.newGrad, overwriteTarget.index);
+        setOverwriteTarget(null);
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        setOverwriteTarget(null);
+      }
+    };
+
+    window.addEventListener("keydown", handleModalKeys);
+    return () => {
+      window.removeEventListener("keydown", handleModalKeys);
+    };
+  }, [overwriteTarget, saveGradient]);
+
   const [recentColors, setRecentColors] = useState<string[]>(["#ffffff", "#0c0a09", "#fafaf9", "#111827", "#1e1b4b", "#064e3b"]);
-  const [hexInput, setHexInput] = useState<string>("#ffffff");
+  const [hexInput, setHexInput] = useState<string>(() => {
+    try {
+      const stored = localStorage.getItem("quote_shuffle_zen_bg_color") || "#ffffff";
+      return stored.startsWith("linear-gradient") ? "#ffffff" : stored;
+    } catch (e) {
+      return "#ffffff";
+    }
+  });
   const [isRandomColorsMode, setIsRandomColorsMode] = useState<boolean>(false);
+  const [isRandomGradientsMode, setIsRandomGradientsMode] = useState<boolean>(false);
+  const [selectedGradIndex, setSelectedGradIndex] = useState<number | null>(() => {
+    try {
+      const storedColor = localStorage.getItem("quote_shuffle_zen_bg_color");
+      if (storedColor && storedColor.startsWith("linear-gradient")) {
+        const storedGradientsStr = localStorage.getItem("quote_shuffle_saved_gradients");
+        const list = storedGradientsStr ? JSON.parse(storedGradientsStr) : [
+          { name: "Olive Gold", color1: "#554023", color2: "#c99846", angle: 135 },
+          { name: "Twilight Aura", color1: "#1e1b4b", color2: "#4c1d95", angle: 135 },
+          { name: "Deep Forest", color1: "#064e3b", color2: "#15803d", angle: 135 },
+          { name: "Cosmic Nebula", color1: "#311042", color2: "#831843", angle: 135 },
+          { name: "Sunset Horizon", color1: "#fdba74", color2: "#f97316", color3: "#b91c1c", angle: 135 },
+          { name: "Cotton Candy", color1: "#fbcfe8", color2: "#f5d0fe", color3: "#e0f2fe", angle: 135 },
+          { name: "Ocean Breeze", color1: "#1e3a8a", color2: "#0d9488", angle: 135 }
+        ];
+        const idx = list.findIndex((grad: any) => {
+          const angle = grad.angle !== undefined ? grad.angle : 135;
+          const gradStr = grad.color3
+            ? `linear-gradient(${angle}deg, ${grad.color1}, ${grad.color2}, ${grad.color3})`
+            : `linear-gradient(${angle}deg, ${grad.color1}, ${grad.color2})`;
+          return storedColor.toLowerCase() === gradStr.toLowerCase();
+        });
+        return idx !== -1 ? idx : null;
+      }
+    } catch (e) {}
+    return null;
+  });
+  const [customGradientAngle, setCustomGradientAngle] = useState<number>(() => {
+    try {
+      const storedColor = localStorage.getItem("quote_shuffle_zen_bg_color");
+      if (storedColor && storedColor.startsWith("linear-gradient")) {
+        const { angleDeg } = parseGradient(storedColor);
+        return angleDeg;
+      }
+    } catch (e) {}
+    return 135;
+  });
   const [isControlsVisible, setIsControlsVisible] = useState<boolean>(true);
 
   const getRandomAestheticColor = () => {
@@ -240,6 +522,15 @@ export default function ShufflePlayer({
       onExitZenMode();
     }
   }, [onClearInitialQuoteId, onExitZenMode]);
+
+  // Save Zen Mode background color changes to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem("quote_shuffle_zen_bg_color", zenBgColor);
+    } catch (e) {
+      console.warn("Failed to persist zenBgColor to localStorage:", e);
+    }
+  }, [zenBgColor]);
 
   // Close context menu on click anywhere
   useEffect(() => {
@@ -565,7 +856,16 @@ export default function ShufflePlayer({
     ctx.clearRect(0, 0, width, height);
 
     // Fill background with current background color
-    ctx.fillStyle = zenBgColor;
+    if (zenBgColor.startsWith("linear-gradient")) {
+      const { color1, color2, angleDeg } = parseGradient(zenBgColor);
+      const coords = getGradientCoords(angleDeg, width, height);
+      const grad = ctx.createLinearGradient(coords.x0, coords.y0, coords.x1, coords.y1);
+      grad.addColorStop(0, color1);
+      grad.addColorStop(1, color2);
+      ctx.fillStyle = grad;
+    } else {
+      ctx.fillStyle = zenBgColor;
+    }
     ctx.fillRect(0, 0, width, height);
 
     // Draw giant faint quotes watermark
@@ -904,14 +1204,27 @@ export default function ShufflePlayer({
     }
   }, [initialQuoteId, shufflePool]);
 
-  // Dynamic Random Background Color handler on transition
+  // Dynamic Random Background Color/Gradient handler on transition
   useEffect(() => {
-    if (isZenMode && isRandomColorsMode && currentQuoteIndex !== -1) {
-      const randomColor = getRandomAestheticColor();
-      setZenBgColor(randomColor);
-      setHexInput(randomColor);
+    if (isZenMode && currentQuoteIndex !== -1) {
+      if (isRandomColorsMode) {
+        const randomColor = getRandomAestheticColor();
+        setZenBgColor(randomColor);
+        setHexInput(randomColor);
+      } else if (isRandomGradientsMode) {
+        if (savedGradients.length > 0) {
+          const randomIndex = Math.floor(Math.random() * savedGradients.length);
+          const grad = savedGradients[randomIndex];
+          const angle = grad.angle !== undefined ? grad.angle : 135;
+          const gradStr = grad.color3
+            ? `linear-gradient(${angle}deg, ${grad.color1}, ${grad.color2}, ${grad.color3})`
+            : `linear-gradient(${angle}deg, ${grad.color1}, ${grad.color2})`;
+          setZenBgColor(gradStr);
+          setSelectedGradIndex(randomIndex);
+        }
+      }
     }
-  }, [currentQuoteIndex, isZenMode, isRandomColorsMode]);
+  }, [currentQuoteIndex, isZenMode, isRandomColorsMode, isRandomGradientsMode, savedGradients]);
 
   // Autoplay handler
   useEffect(() => {
@@ -1750,7 +2063,7 @@ export default function ShufflePlayer({
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.4 }}
-            style={{ backgroundColor: zenBgColor }}
+            style={{ background: zenBgColor }}
             className={`fixed inset-0 z-[120] flex flex-col justify-between p-6 md:p-14 select-none touch-manipulation transition-all duration-300 ${
               isDarkText ? "text-stone-900 animate-fade-in" : "text-stone-100 animate-fade-in"
             } ${!isControlsVisible ? "cursor-none" : ""}`}
@@ -1833,7 +2146,7 @@ export default function ShufflePlayer({
                     <Palette className="w-4 h-4" />
                     <div
                       className="w-3.5 h-3.5 rounded-full border border-stone-400"
-                      style={{ backgroundColor: zenBgColor }}
+                      style={{ background: zenBgColor }}
                     />
                   </button>
 
@@ -1844,149 +2157,651 @@ export default function ShufflePlayer({
                         initial={{ opacity: 0, y: 10 }}
                         animate={{ opacity: 1, y: 0 }}
                         exit={{ opacity: 0, y: 10 }}
-                        className={`absolute right-0 mt-2 p-4 rounded-2xl border shadow-2xl w-64 z-50 flex flex-col gap-3 ${
+                        className={`absolute right-0 mt-2 p-4 rounded-2xl border shadow-2xl w-72 z-50 flex flex-col gap-3 ${
                           isDarkText
                             ? "bg-white border-stone-200 text-stone-800"
                             : "bg-stone-900 border-stone-800 text-stone-100"
                         }`}
                       >
-                        <h5 className="font-bold text-xs uppercase tracking-wider">
-                          Background Color
-                        </h5>
-
-                        {/* Random (colors) toggle button */}
-                        <button
-                          onClick={() => {
-                            const newMode = !isRandomColorsMode;
-                            setIsRandomColorsMode(newMode);
-                            if (newMode) {
-                              const randomColor = getRandomAestheticColor();
-                              setZenBgColor(randomColor);
-                              setHexInput(randomColor);
-                            }
-                          }}
-                          className={`w-full py-2 px-3 rounded-xl border flex items-center justify-between transition-all cursor-pointer text-xs font-semibold ${
-                            isRandomColorsMode
-                              ? "bg-amber-500/10 border-amber-500 text-amber-600 dark:text-amber-400"
-                              : isDarkText
-                              ? "border-stone-200 hover:bg-stone-50 text-stone-700"
-                              : "border-stone-800 hover:bg-stone-950 text-stone-300"
-                          }`}
-                        >
-                          <div className="flex items-center gap-2">
-                            <Sparkles className="w-3.5 h-3.5 animate-pulse text-amber-500" />
-                            <span>Random (colors)</span>
-                          </div>
-                          <div className={`w-2 h-2 rounded-full ${isRandomColorsMode ? "bg-amber-500" : "bg-stone-300 dark:bg-stone-700"}`} />
-                        </button>
-
-                        {/* Recent Colors */}
-                        <div className="flex flex-col gap-1.5">
-                          <span className="text-[10px] font-semibold text-stone-400 uppercase">Recent Colors</span>
-                          <div className="flex items-center gap-2">
-                            {recentColors.map((color) => {
-                              const isSelected = !isRandomColorsMode && zenBgColor.toLowerCase() === color.toLowerCase();
-                              return (
-                                <button
-                                  key={color}
-                                  onClick={() => handleSelectColor(color)}
-                                  className={`w-8 h-8 rounded-lg border-2 transition-all relative cursor-pointer ${
-                                    isSelected
-                                      ? "border-amber-500 scale-105"
-                                      : "border-transparent hover:scale-105"
-                                  }`}
-                                  style={{ backgroundColor: color }}
-                                  title={color}
-                                >
-                                  {isSelected && (
-                                    <div className="absolute inset-0 flex items-center justify-center">
-                                      <Check className={`w-3.5 h-3.5 ${getContrastColor(color) === "dark" ? "text-stone-950" : "text-white"}`} />
-                                    </div>
-                                  )}
-                                </button>
-                              );
-                            })}
-                          </div>
+                        <div className="flex items-center justify-between">
+                          <h5 className="font-bold text-xs uppercase tracking-wider">
+                            Background Styling
+                          </h5>
+                          <button
+                            type="button"
+                            onClick={() => setShowColorPicker(false)}
+                            className={`p-1 rounded-lg transition-colors cursor-pointer ${
+                              isDarkText
+                                ? "hover:bg-stone-100 text-stone-400 hover:text-stone-600"
+                                : "hover:bg-stone-800 text-stone-400 hover:text-stone-200"
+                            }`}
+                            title="Close Settings"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
                         </div>
 
-                        {/* Custom Color Inputs */}
-                        <div className="flex flex-col gap-1.5 mt-1">
-                          <span className="text-[10px] font-semibold text-stone-400 uppercase">Custom Color</span>
-                          <div className="flex items-center gap-2">
-                            {/* Color Picker input */}
-                            <div className={`relative w-9 h-9 rounded-xl border border-stone-300 overflow-hidden shrink-0 ${isRandomColorsMode ? "opacity-40 cursor-not-allowed" : "cursor-pointer"}`}>
-                              <input
-                                type="color"
-                                disabled={isRandomColorsMode}
-                                value={isRandomColorsMode ? "#ffffff" : zenBgColor}
-                                onChange={(e) => handleSelectColor(e.target.value)}
-                                className="absolute inset-0 w-full h-full p-0 border-0 cursor-pointer opacity-0 disabled:cursor-not-allowed"
-                              />
-                              <div
-                                className="w-full h-full flex items-center justify-center font-bold"
-                                style={{ backgroundColor: isRandomColorsMode ? "#a8a29e" : zenBgColor }}
-                              >
-                                <Palette className={`w-4 h-4 ${isDarkText ? "text-stone-950" : "text-white"}`} />
+                        {/* Solid / Gradient Tab Buttons */}
+                        <div className="flex border-b border-stone-200 dark:border-stone-850 pb-1 mb-1">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setActiveColorTab("solid");
+                              setIsRandomColorsMode(false);
+                              setIsRandomGradientsMode(false);
+                              setSelectedGradIndex(null);
+                            }}
+                            className={`flex-1 text-center py-1 text-xs font-bold transition-all border-b-2 cursor-pointer ${
+                              activeColorTab === "solid"
+                                ? "border-amber-500 text-amber-600 dark:text-amber-400 font-extrabold"
+                                : "border-transparent text-stone-400 hover:text-stone-600 dark:hover:text-stone-300"
+                            }`}
+                          >
+                            Solid
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setActiveColorTab("gradient");
+                              setIsRandomColorsMode(false);
+                              setIsRandomGradientsMode(false);
+                            }}
+                            className={`flex-1 text-center py-1 text-xs font-bold transition-all border-b-2 cursor-pointer ${
+                              activeColorTab === "gradient"
+                                ? "border-amber-500 text-amber-600 dark:text-amber-400 font-extrabold"
+                                : "border-transparent text-stone-400 hover:text-stone-600 dark:hover:text-stone-300"
+                            }`}
+                          >
+                            Gradient
+                          </button>
+                        </div>
+
+                        {activeColorTab === "solid" ? (
+                          <>
+                            {/* Random (colors) toggle button */}
+                            <button
+                              onClick={() => {
+                                const newMode = !isRandomColorsMode;
+                                setIsRandomColorsMode(newMode);
+                                setIsRandomGradientsMode(false);
+                                setSelectedGradIndex(null);
+                                if (newMode) {
+                                  const randomColor = getRandomAestheticColor();
+                                  setZenBgColor(randomColor);
+                                  setHexInput(randomColor);
+                                }
+                              }}
+                              className={`w-full py-2 px-3 rounded-xl border flex items-center justify-between transition-all cursor-pointer text-xs font-semibold ${
+                                isRandomColorsMode
+                                  ? "bg-amber-500/10 border-amber-500 text-amber-600 dark:text-amber-400"
+                                  : isDarkText
+                                  ? "border-stone-200 hover:bg-stone-50 text-stone-700"
+                                  : "border-stone-800 hover:bg-stone-950 text-stone-300"
+                              }`}
+                            >
+                              <div className="flex items-center gap-2">
+                                <Sparkles className="w-3.5 h-3.5 animate-pulse text-amber-500" />
+                                <span>Random (colors)</span>
+                              </div>
+                              <div className={`w-2 h-2 rounded-full ${isRandomColorsMode ? "bg-amber-500" : "bg-stone-300 dark:bg-stone-700"}`} />
+                            </button>
+
+                            {/* Recent Colors */}
+                            <div className="flex flex-col gap-1.5">
+                              <span className="text-[10px] font-semibold text-stone-400 uppercase">Recent Colors</span>
+                              <div className="flex items-center gap-2 flex-wrap">
+                                {recentColors.map((color) => {
+                                  const isSelected = !isRandomColorsMode && !isRandomGradientsMode && zenBgColor.toLowerCase() === color.toLowerCase();
+                                  return (
+                                    <button
+                                      key={color}
+                                      onClick={() => {
+                                        handleSelectColor(color);
+                                        setIsRandomGradientsMode(false);
+                                        setSelectedGradIndex(null);
+                                      }}
+                                      className={`w-8 h-8 rounded-lg border-2 transition-all relative cursor-pointer ${
+                                        isSelected
+                                          ? "border-amber-500 scale-105"
+                                          : "border-transparent hover:scale-105"
+                                      }`}
+                                      style={{ backgroundColor: color }}
+                                      title={color}
+                                    >
+                                      {isSelected && (
+                                        <div className="absolute inset-0 flex items-center justify-center">
+                                          <Check className={`w-3.5 h-3.5 ${getContrastColor(color) === "dark" ? "text-stone-950" : "text-white"}`} />
+                                        </div>
+                                      )}
+                                    </button>
+                                  );
+                                })}
                               </div>
                             </div>
 
-                            {/* Hex Input & OK Button */}
+                            {/* Custom Color Inputs */}
+                            <div className="flex flex-col gap-1.5 mt-1">
+                              <span className="text-[10px] font-semibold text-stone-400 uppercase">Custom Color</span>
+                              <div className="flex items-center gap-2">
+                                {/* Color Picker input */}
+                                <div className={`relative w-9 h-9 rounded-xl border border-stone-300 overflow-hidden shrink-0 ${isRandomColorsMode ? "opacity-40 cursor-not-allowed" : "cursor-pointer"}`}>
+                                  <input
+                                    type="color"
+                                    disabled={isRandomColorsMode}
+                                    value={isRandomColorsMode ? "#ffffff" : (zenBgColor.startsWith("linear-gradient") ? "#ffffff" : zenBgColor)}
+                                    onChange={(e) => {
+                                      handleSelectColor(e.target.value);
+                                      setIsRandomGradientsMode(false);
+                                      setSelectedGradIndex(null);
+                                    }}
+                                    className="absolute inset-0 w-full h-full p-0 border-0 cursor-pointer opacity-0 disabled:cursor-not-allowed"
+                                  />
+                                  <div
+                                    className="w-full h-full flex items-center justify-center font-bold"
+                                    style={{ background: isRandomColorsMode ? "#a8a29e" : (zenBgColor.startsWith("linear-gradient") ? "#ffffff" : zenBgColor) }}
+                                  >
+                                    <Palette className={`w-4 h-4 ${isDarkText ? "text-stone-950" : "text-white"}`} />
+                                  </div>
+                                </div>
+
+                                {/* Hex Input & OK Button */}
+                                <form
+                                  onSubmit={(e) => {
+                                    e.preventDefault();
+                                    if (isRandomColorsMode) {
+                                      setShowColorPicker(false);
+                                    } else {
+                                      handleSaveToRecent(hexInput);
+                                      setIsRandomGradientsMode(false);
+                                      setSelectedGradIndex(null);
+                                    }
+                                  }}
+                                  className="flex items-center gap-1.5 flex-1"
+                                >
+                                  <input
+                                    type="text"
+                                    disabled={isRandomColorsMode}
+                                    value={isRandomColorsMode ? "Random active" : hexInput}
+                                    onFocus={(e) => e.target.select()}
+                                    onChange={(e) => {
+                                      if (isRandomColorsMode) return;
+                                      let val = e.target.value;
+                                      if (!val.startsWith("#") && val.trim() !== "") {
+                                        val = "#" + val;
+                                      }
+                                      setHexInput(val);
+                                      if (/^#[0-9A-Fa-f]{6}$/.test(val) || /^#[0-9A-Fa-f]{3}$/.test(val)) {
+                                        setZenBgColor(val);
+                                        setIsRandomGradientsMode(false);
+                                        setSelectedGradIndex(null);
+                                      }
+                                    }}
+                                    onBlur={() => {
+                                      if (isRandomColorsMode) return;
+                                      if (/^#[0-9A-Fa-f]{6}$/.test(hexInput) || /^#[0-9A-Fa-f]{3}$/.test(hexInput)) {
+                                        handleSelectColor(hexInput);
+                                        setIsRandomGradientsMode(false);
+                                        setSelectedGradIndex(null);
+                                      } else {
+                                        setHexInput(zenBgColor.startsWith("linear-gradient") ? "#ffffff" : zenBgColor);
+                                      }
+                                    }}
+                                    className={`text-xs font-mono w-full px-2.5 py-2 rounded-xl border disabled:cursor-not-allowed disabled:opacity-60 ${
+                                      isDarkText
+                                        ? "bg-stone-50 border-stone-200 text-stone-850 focus:border-amber-500"
+                                        : "bg-stone-950 border-stone-750 text-stone-100 focus:border-amber-500"
+                                    } focus:outline-none transition-all`}
+                                    placeholder="#000000"
+                                    maxLength={15}
+                                  />
+                                  <button
+                                    type="submit"
+                                    className={`text-xs font-bold px-3 py-2 rounded-xl transition-all cursor-pointer shrink-0 ${
+                                      isDarkText
+                                        ? "bg-stone-900 text-white hover:bg-stone-800"
+                                        : "bg-white text-stone-950 hover:bg-stone-200"
+                                    }`}
+                                    title={isRandomColorsMode ? "Close Settings" : "Add to Recent"}
+                                  >
+                                    OK
+                                  </button>
+                                </form>
+                              </div>
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            {/* Random (gradients) toggle button */}
+                            <button
+                              onClick={() => {
+                                const newMode = !isRandomGradientsMode;
+                                setIsRandomGradientsMode(newMode);
+                                setIsRandomColorsMode(false);
+                                if (newMode && savedGradients.length > 0) {
+                                  const randomIndex = Math.floor(Math.random() * savedGradients.length);
+                                  const grad = savedGradients[randomIndex];
+                                  const angle = grad.angle !== undefined ? grad.angle : 135;
+                                  const gradStr = grad.color3
+                                    ? `linear-gradient(${angle}deg, ${grad.color1}, ${grad.color2}, ${grad.color3})`
+                                    : `linear-gradient(${angle}deg, ${grad.color1}, ${grad.color2})`;
+                                  setZenBgColor(gradStr);
+                                  setSelectedGradIndex(randomIndex);
+                                }
+                              }}
+                              className={`w-full py-2 px-3 rounded-xl border flex items-center justify-between transition-all cursor-pointer text-xs font-semibold ${
+                                isRandomGradientsMode
+                                  ? "bg-amber-500/10 border-amber-500 text-amber-600 dark:text-amber-400"
+                                  : isDarkText
+                                  ? "border-stone-200 hover:bg-stone-50 text-stone-700"
+                                  : "border-stone-800 hover:bg-stone-950 text-stone-300"
+                              }`}
+                            >
+                              <div className="flex items-center gap-2">
+                                <Sparkles className="w-3.5 h-3.5 animate-pulse text-amber-500" />
+                                <span>Random (gradients)</span>
+                              </div>
+                              <div className={`w-2 h-2 rounded-full ${isRandomGradientsMode ? "bg-amber-500" : "bg-stone-300 dark:bg-stone-700"}`} />
+                            </button>
+
+                            {/* Saved & Preset Gradients list */}
+                            <div className="flex flex-col gap-1.5 max-h-[140px] overflow-y-auto pr-1">
+                              <span className="text-[10px] font-semibold text-stone-400 uppercase">Saved & Presets</span>
+                              <div className="flex flex-col gap-1">
+                                {savedGradients.map((grad, idx) => {
+                                  const angle = grad.angle !== undefined ? grad.angle : 135;
+                                  const gradStr = grad.color3
+                                    ? `linear-gradient(${angle}deg, ${grad.color1}, ${grad.color2}, ${grad.color3})`
+                                    : `linear-gradient(${angle}deg, ${grad.color1}, ${grad.color2})`;
+                                  const isSelected = !isRandomColorsMode && !isRandomGradientsMode && selectedGradIndex === idx;
+                                  return (
+                                    <div
+                                      key={idx}
+                                      onClick={() => {
+                                        setSelectedGradIndex(idx);
+                                        setIsRandomGradientsMode(false);
+                                        setIsRandomColorsMode(false);
+                                        setZenBgColor(gradStr);
+                                        setGradientColor1(grad.color1);
+                                        setGradientColor2(grad.color2);
+                                        if (grad.color3) {
+                                          setGradientColor3(grad.color3);
+                                          setUseColor3(true);
+                                        } else {
+                                          setUseColor3(false);
+                                        }
+                                        setCustomGradientAngle(angle);
+                                        setNewGradientName(grad.name);
+                                      }}
+                                      className={`flex items-center justify-between p-1.5 rounded-xl border transition-all cursor-pointer text-xs ${
+                                        isSelected
+                                          ? "border-amber-500 bg-amber-500/5 font-bold"
+                                          : isDarkText
+                                          ? "border-stone-200 hover:bg-stone-50 text-stone-700"
+                                          : "border-stone-800 hover:bg-stone-950 text-stone-300"
+                                      }`}
+                                    >
+                                      <div className="flex items-center gap-2">
+                                        <div
+                                          className="w-5 h-5 rounded-md border border-stone-300/40 shrink-0"
+                                          style={{ background: gradStr }}
+                                        />
+                                        <span className="truncate max-w-[130px]">{grad.name}</span>
+                                      </div>
+
+                                      <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                                        {isSelected && <Check className="w-3.5 h-3.5 text-amber-500" />}
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            const updated = savedGradients.filter((_, i) => i !== idx);
+                                            setSavedGradients(updated);
+                                            if (selectedGradIndex === idx) {
+                                              setSelectedGradIndex(null);
+                                            } else if (selectedGradIndex !== null && selectedGradIndex > idx) {
+                                              setSelectedGradIndex(selectedGradIndex - 1);
+                                            }
+                                            try {
+                                              localStorage.setItem("quote_shuffle_saved_gradients", JSON.stringify(updated));
+                                            } catch (err) {
+                                              console.warn("Failed to save gradients to localStorage:", err);
+                                            }
+                                          }}
+                                          className="p-1 text-stone-400 hover:text-red-500 transition-colors rounded-md hover:bg-red-500/10"
+                                          title="Delete gradient"
+                                        >
+                                          <Trash2 className="w-3 h-3" />
+                                        </button>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+
+                            {/* Angle Adjustment Slider */}
+                            {zenBgColor.startsWith("linear-gradient") && (
+                              <div className={`flex flex-col gap-1.5 p-2.5 rounded-xl border shadow-inner transition-all ${
+                                isDarkText
+                                  ? "bg-stone-100 border-stone-200"
+                                  : "bg-stone-950 border-stone-800"
+                              }`}>
+                                <div className="flex items-center justify-between">
+                                  <span className={`text-[10px] font-bold uppercase tracking-wider ${
+                                    isDarkText ? "text-stone-700" : "text-stone-200"
+                                  }`}>
+                                    Gradient Angle
+                                  </span>
+                                  <span className="text-[10px] font-mono font-black text-amber-500 bg-amber-500/10 px-1.5 py-0.5 rounded">
+                                    {parseGradient(zenBgColor).angleDeg}°
+                                  </span>
+                                </div>
+                                <input
+                                  type="range"
+                                  min="0"
+                                  max="360"
+                                  step="45"
+                                  value={parseGradient(zenBgColor).angleDeg}
+                                  onChange={(e) => {
+                                    const newAngle = parseInt(e.target.value, 10);
+                                    const { color1, color2, color3 } = parseGradient(zenBgColor);
+                                    const gradStr = color3
+                                      ? `linear-gradient(${newAngle}deg, ${color1}, ${color2}, ${color3})`
+                                      : `linear-gradient(${newAngle}deg, ${color1}, ${color2})`;
+                                    setZenBgColor(gradStr);
+                                    setIsRandomGradientsMode(false);
+                                    
+                                    // Persist to saved gradient list if it's currently selected
+                                    if (selectedGradIndex !== null && selectedGradIndex < savedGradients.length) {
+                                      const updated = [...savedGradients];
+                                      updated[selectedGradIndex] = {
+                                        ...updated[selectedGradIndex],
+                                        angle: newAngle
+                                      };
+                                      setSavedGradients(updated);
+                                      try {
+                                        localStorage.setItem("quote_shuffle_saved_gradients", JSON.stringify(updated));
+                                      } catch (err) {
+                                        console.warn("Failed to save gradient angle:", err);
+                                      }
+                                    } else {
+                                      setCustomGradientAngle(newAngle);
+                                    }
+                                  }}
+                                  className="w-full accent-amber-500 h-1 bg-stone-300 dark:bg-stone-800 rounded-lg appearance-none cursor-pointer"
+                                />
+                              </div>
+                            )}
+
+                            {/* Create Custom Gradient Form */}
                             <form
                               onSubmit={(e) => {
                                 e.preventDefault();
-                                if (isRandomColorsMode) {
-                                  setShowColorPicker(false);
+                                const trimmedName = newGradientName.trim();
+                                if (!trimmedName) return;
+
+                                const existingIndex = savedGradients.findIndex(
+                                  (g) => g.name.toLowerCase() === trimmedName.toLowerCase()
+                                );
+
+                                const newGrad: { name: string; color1: string; color2: string; color3?: string; angle: number } = {
+                                  name: trimmedName,
+                                  color1: gradientColor1,
+                                  color2: gradientColor2,
+                                  angle: customGradientAngle
+                                };
+                                if (useColor3) {
+                                  newGrad.color3 = gradientColor3;
+                                }
+
+                                if (existingIndex !== -1) {
+                                  setOverwriteTarget({ index: existingIndex, newGrad });
                                 } else {
-                                  handleSaveToRecent(hexInput);
+                                  saveGradient(newGrad);
                                 }
                               }}
-                              className="flex items-center gap-1.5 flex-1"
+                              className="flex flex-col gap-2 mt-1 pt-2 border-t border-stone-200 dark:border-stone-800"
                             >
-                              <input
-                                type="text"
-                                disabled={isRandomColorsMode}
-                                value={isRandomColorsMode ? "Random active" : hexInput}
-                                onChange={(e) => {
-                                  if (isRandomColorsMode) return;
-                                  let val = e.target.value;
-                                  if (!val.startsWith("#") && val.trim() !== "") {
-                                    val = "#" + val;
-                                  }
-                                  setHexInput(val);
-                                  if (/^#[0-9A-Fa-f]{6}$/.test(val) || /^#[0-9A-Fa-f]{3}$/.test(val)) {
-                                    setZenBgColor(val);
-                                  }
-                                }}
-                                onBlur={() => {
-                                  if (isRandomColorsMode) return;
-                                  if (/^#[0-9A-Fa-f]{6}$/.test(hexInput) || /^#[0-9A-Fa-f]{3}$/.test(hexInput)) {
-                                    handleSelectColor(hexInput);
-                                  } else {
-                                    setHexInput(zenBgColor);
-                                  }
-                                }}
-                                className={`text-xs font-mono w-full px-2.5 py-2 rounded-xl border disabled:cursor-not-allowed disabled:opacity-60 ${
-                                  isDarkText
-                                    ? "bg-stone-50 border-stone-200 text-stone-850 focus:border-amber-500"
-                                    : "bg-stone-950 border-stone-750 text-stone-100 focus:border-amber-500"
-                                } focus:outline-none transition-all`}
-                                placeholder="#000000"
-                                maxLength={15}
-                              />
-                              <button
-                                type="submit"
-                                className={`text-xs font-bold px-3 py-2 rounded-xl transition-all cursor-pointer shrink-0 ${
-                                  isDarkText
-                                    ? "bg-stone-900 text-white hover:bg-stone-800"
-                                    : "bg-white text-stone-950 hover:bg-stone-200"
-                                }`}
-                                title={isRandomColorsMode ? "Close Settings" : "Add to Recent"}
-                              >
-                                OK
-                              </button>
+                              <div className="flex items-center justify-between">
+                                <span className="text-[10px] font-semibold text-stone-400 uppercase">Create Gradient</span>
+                                <div className="flex bg-stone-100 dark:bg-stone-900 rounded-lg p-0.5 border border-stone-200 dark:border-stone-800">
+                                  <button
+                                    type="button"
+                                    tabIndex={-1}
+                                    onClick={() => {
+                                      setUseColor3(false);
+                                      const gradStr = `linear-gradient(${customGradientAngle}deg, ${gradientColor1}, ${gradientColor2})`;
+                                      setZenBgColor(gradStr);
+                                    }}
+                                    className={`px-1.5 py-0.5 rounded text-[9px] font-bold transition-all cursor-pointer ${
+                                      !useColor3
+                                        ? isDarkText
+                                          ? "bg-white text-stone-950 shadow-sm"
+                                          : "bg-stone-800 text-stone-100 shadow-sm"
+                                        : "text-stone-400 hover:text-stone-200"
+                                    }`}
+                                  >
+                                    2 Co
+                                  </button>
+                                  <button
+                                    type="button"
+                                    tabIndex={-1}
+                                    onClick={() => {
+                                      setUseColor3(true);
+                                      const gradStr = `linear-gradient(${customGradientAngle}deg, ${gradientColor1}, ${gradientColor2}, ${gradientColor3})`;
+                                      setZenBgColor(gradStr);
+                                    }}
+                                    className={`px-1.5 py-0.5 rounded text-[9px] font-bold transition-all cursor-pointer ${
+                                      useColor3
+                                        ? isDarkText
+                                          ? "bg-white text-stone-950 shadow-sm"
+                                          : "bg-stone-800 text-stone-100 shadow-sm"
+                                        : "text-stone-400 hover:text-stone-200"
+                                    }`}
+                                  >
+                                    3 Co
+                                  </button>
+                                </div>
+                              </div>
+
+                              <div className="flex items-center gap-1.5">
+                                {/* Color 1 input & Hex */}
+                                <div className="flex flex-col gap-0.5 flex-1">
+                                  <span className="text-[9px] text-stone-400 font-semibold">Color 1</span>
+                                  <div className="flex items-center gap-1">
+                                    <div className="relative w-6 h-6 rounded-md border border-stone-300 overflow-hidden shrink-0 cursor-pointer">
+                                      <input
+                                        type="color"
+                                        tabIndex={-1}
+                                        value={gradientColor1}
+                                        onChange={(e) => {
+                                          setGradientColor1(e.target.value);
+                                          const gradStr = useColor3
+                                            ? `linear-gradient(${customGradientAngle}deg, ${e.target.value}, ${gradientColor2}, ${gradientColor3})`
+                                            : `linear-gradient(${customGradientAngle}deg, ${e.target.value}, ${gradientColor2})`;
+                                          setZenBgColor(gradStr);
+                                          setIsRandomColorsMode(false);
+                                          setIsRandomGradientsMode(false);
+                                          setSelectedGradIndex(null);
+                                        }}
+                                        className="absolute inset-0 w-full h-full p-0 border-0 cursor-pointer opacity-0"
+                                      />
+                                      <div className="w-full h-full" style={{ backgroundColor: gradientColor1 }} />
+                                    </div>
+                                    <input
+                                      type="text"
+                                      ref={color1InputRef}
+                                      value={gradientColor1}
+                                      onFocus={(e) => e.target.select()}
+                                      onChange={(e) => {
+                                        let val = e.target.value;
+                                        if (!val.startsWith("#") && val.trim() !== "") val = "#" + val;
+                                        setGradientColor1(val);
+                                        if (/^#[0-9A-Fa-f]{6}$/.test(val) || /^#[0-9A-Fa-f]{3}$/.test(val)) {
+                                          const gradStr = useColor3
+                                            ? `linear-gradient(${customGradientAngle}deg, ${val}, ${gradientColor2}, ${gradientColor3})`
+                                            : `linear-gradient(${customGradientAngle}deg, ${val}, ${gradientColor2})`;
+                                          setZenBgColor(gradStr);
+                                          setIsRandomColorsMode(false);
+                                          setIsRandomGradientsMode(false);
+                                          setSelectedGradIndex(null);
+                                        }
+                                      }}
+                                      className={`text-[9px] font-mono w-full px-1 py-0.5 rounded-md border focus:outline-none ${
+                                        isDarkText
+                                          ? "bg-stone-50 border-stone-200 text-stone-850 focus:border-amber-500"
+                                          : "bg-stone-950 border-stone-750 text-stone-100 focus:border-amber-500"
+                                      }`}
+                                      maxLength={7}
+                                    />
+                                  </div>
+                                </div>
+
+                                {/* Color 2 input & Hex */}
+                                <div className="flex flex-col gap-0.5 flex-1">
+                                  <span className="text-[9px] text-stone-400 font-semibold">Color 2</span>
+                                  <div className="flex items-center gap-1">
+                                    <div className="relative w-6 h-6 rounded-md border border-stone-300 overflow-hidden shrink-0 cursor-pointer">
+                                      <input
+                                        type="color"
+                                        tabIndex={-1}
+                                        value={gradientColor2}
+                                        onChange={(e) => {
+                                          setGradientColor2(e.target.value);
+                                          const gradStr = useColor3
+                                            ? `linear-gradient(${customGradientAngle}deg, ${gradientColor1}, ${e.target.value}, ${gradientColor3})`
+                                            : `linear-gradient(${customGradientAngle}deg, ${gradientColor1}, ${e.target.value})`;
+                                          setZenBgColor(gradStr);
+                                          setIsRandomColorsMode(false);
+                                          setIsRandomGradientsMode(false);
+                                          setSelectedGradIndex(null);
+                                        }}
+                                        className="absolute inset-0 w-full h-full p-0 border-0 cursor-pointer opacity-0"
+                                      />
+                                      <div className="w-full h-full" style={{ backgroundColor: gradientColor2 }} />
+                                    </div>
+                                    <input
+                                      type="text"
+                                      value={gradientColor2}
+                                      onFocus={(e) => e.target.select()}
+                                      onChange={(e) => {
+                                        let val = e.target.value;
+                                        if (!val.startsWith("#") && val.trim() !== "") val = "#" + val;
+                                        setGradientColor2(val);
+                                        if (/^#[0-9A-Fa-f]{6}$/.test(val) || /^#[0-9A-Fa-f]{3}$/.test(val)) {
+                                          const gradStr = useColor3
+                                            ? `linear-gradient(${customGradientAngle}deg, ${gradientColor1}, ${val}, ${gradientColor3})`
+                                            : `linear-gradient(${customGradientAngle}deg, ${gradientColor1}, ${val})`;
+                                          setZenBgColor(gradStr);
+                                          setIsRandomColorsMode(false);
+                                          setIsRandomGradientsMode(false);
+                                          setSelectedGradIndex(null);
+                                        }
+                                      }}
+                                      className={`text-[9px] font-mono w-full px-1 py-0.5 rounded-md border focus:outline-none ${
+                                        isDarkText
+                                          ? "bg-stone-50 border-stone-200 text-stone-850 focus:border-amber-500"
+                                          : "bg-stone-950 border-stone-750 text-stone-100 focus:border-amber-500"
+                                      }`}
+                                      maxLength={7}
+                                    />
+                                  </div>
+                                </div>
+
+                                {/* Color 3 input & Hex */}
+                                {useColor3 && (
+                                  <div className="flex flex-col gap-0.5 flex-1 animate-fade-in">
+                                    <span className="text-[9px] text-stone-400 font-semibold">Color 3</span>
+                                    <div className="flex items-center gap-1">
+                                      <div className="relative w-6 h-6 rounded-md border border-stone-300 overflow-hidden shrink-0 cursor-pointer">
+                                        <input
+                                          type="color"
+                                          tabIndex={-1}
+                                          value={gradientColor3}
+                                          onChange={(e) => {
+                                            setGradientColor3(e.target.value);
+                                            const gradStr = `linear-gradient(${customGradientAngle}deg, ${gradientColor1}, ${gradientColor2}, ${e.target.value})`;
+                                            setZenBgColor(gradStr);
+                                            setIsRandomColorsMode(false);
+                                            setIsRandomGradientsMode(false);
+                                            setSelectedGradIndex(null);
+                                          }}
+                                          className="absolute inset-0 w-full h-full p-0 border-0 cursor-pointer opacity-0"
+                                        />
+                                        <div className="w-full h-full" style={{ backgroundColor: gradientColor3 }} />
+                                      </div>
+                                      <input
+                                        type="text"
+                                        value={gradientColor3}
+                                        onFocus={(e) => e.target.select()}
+                                        onChange={(e) => {
+                                          let val = e.target.value;
+                                          if (!val.startsWith("#") && val.trim() !== "") val = "#" + val;
+                                          setGradientColor3(val);
+                                          if (/^#[0-9A-Fa-f]{6}$/.test(val) || /^#[0-9A-Fa-f]{3}$/.test(val)) {
+                                            const gradStr = `linear-gradient(${customGradientAngle}deg, ${gradientColor1}, ${gradientColor2}, ${val})`;
+                                            setZenBgColor(gradStr);
+                                            setIsRandomColorsMode(false);
+                                            setIsRandomGradientsMode(false);
+                                            setSelectedGradIndex(null);
+                                          }
+                                        }}
+                                        className={`text-[9px] font-mono w-full px-1 py-0.5 rounded-md border focus:outline-none ${
+                                          isDarkText
+                                            ? "bg-stone-50 border-stone-200 text-stone-850 focus:border-amber-500"
+                                            : "bg-stone-950 border-stone-750 text-stone-100 focus:border-amber-500"
+                                        }`}
+                                        maxLength={7}
+                                      />
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+
+                              {/* Save Section */}
+                              <div className="flex flex-col gap-0.5">
+                                <span className="text-[9px] text-stone-400 font-semibold">Save with Name</span>
+                                <div className="flex items-center gap-1.5">
+                                  <input
+                                    type="text"
+                                    placeholder="e.g. Sunset Wood"
+                                    value={newGradientName}
+                                    onChange={(e) => setNewGradientName(e.target.value)}
+                                    className={`text-xs w-full px-2 py-1.5 rounded-lg border focus:outline-none ${
+                                      isDarkText
+                                        ? "bg-stone-50 border-stone-200 text-stone-850 focus:border-amber-500"
+                                        : "bg-stone-950 border-stone-750 text-stone-100 focus:border-amber-500"
+                                    }`}
+                                    maxLength={20}
+                                  />
+                                  <button
+                                    type="submit"
+                                    disabled={!newGradientName.trim()}
+                                    className={`text-xs font-bold px-3 py-1.5 rounded-lg transition-all cursor-pointer shrink-0 disabled:opacity-40 disabled:cursor-not-allowed ${
+                                      isDarkText
+                                        ? "bg-stone-900 text-white hover:bg-stone-800"
+                                        : "bg-white text-stone-950 hover:bg-stone-200"
+                                    }`}
+                                  >
+                                    Save
+                                  </button>
+                                </div>
+                              </div>
                             </form>
-                          </div>
-                        </div>
+
+                            {/* OK / Close Button */}
+                            <button
+                              type="button"
+                              onClick={() => setShowColorPicker(false)}
+                              className={`w-full py-2 mt-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                                isDarkText
+                                  ? "bg-stone-900 text-white hover:bg-stone-800"
+                                  : "bg-white text-stone-950 hover:bg-stone-200"
+                              }`}
+                            >
+                              OK
+                            </button>
+                          </>
+                        )}
                       </motion.div>
                     )}
                   </AnimatePresence>
@@ -2436,6 +3251,50 @@ export default function ShufflePlayer({
                   Save Changes
                 </button>
               </div>
+            </div>
+          </motion.div>
+        </div>
+      )}
+
+      {/* Overwrite Preset Confirmation Modal */}
+      {overwriteTarget && (
+        <div className="fixed inset-0 z-[220] flex items-center justify-center p-4 bg-stone-900/60 backdrop-blur-md">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95, y: 12 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            className="w-full max-w-md bg-white dark:bg-stone-900 rounded-3xl p-6 shadow-2xl border border-stone-200 dark:border-stone-800"
+          >
+            <div className="flex items-center gap-3 border-b border-stone-100 dark:border-stone-800 pb-3 mb-4">
+              <div className="p-2 rounded-full bg-amber-50 dark:bg-amber-950/50">
+                <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-400" />
+              </div>
+              <h3 className="font-sans font-bold text-lg text-stone-900 dark:text-stone-100">
+                Overwrite Preset?
+              </h3>
+            </div>
+
+            <p className="text-sm text-stone-600 dark:text-stone-300 mb-6 leading-relaxed">
+              A preset named <strong className="text-stone-900 dark:text-stone-100">"{savedGradients[overwriteTarget.index]?.name}"</strong> already exists. Would you like to overwrite it with the new colors?
+            </p>
+
+            <div className="flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setOverwriteTarget(null)}
+                className="px-4 py-2 text-stone-500 hover:text-stone-700 dark:text-stone-400 dark:hover:text-stone-200 bg-stone-50 hover:bg-stone-100 dark:bg-stone-800 dark:hover:bg-stone-750 border border-stone-200 dark:border-stone-700 rounded-xl text-xs font-semibold cursor-pointer transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  saveGradient(overwriteTarget.newGrad, overwriteTarget.index);
+                  setOverwriteTarget(null);
+                }}
+                className="px-5 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-semibold cursor-pointer transition-colors shadow-xs"
+              >
+                Overwrite
+              </button>
             </div>
           </motion.div>
         </div>
