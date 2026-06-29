@@ -6,6 +6,7 @@ export interface Quote {
   createdAt: number;
   rating?: 'up' | 'down' | null;
   isActive?: boolean;
+  fontSize?: number;
 }
 
 export interface Folder {

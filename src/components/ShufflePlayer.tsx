@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import { Quote, Category } from "../types";
+import { Quote, Category, QUOTE_FONTS, QuoteFont } from "../types";
 import {
   Play,
   Pause,
@@ -160,7 +160,8 @@ interface ShufflePlayerProps {
   quotes: Quote[];
   allQuotes: Quote[]; // all quotes regardless of active categories
   onRateQuote?: (id: string, rating: 'up' | 'down' | null) => void;
-  onUpdateQuote?: (id: string, text: string, author: string, categoryId?: string) => void;
+  onUpdateQuote?: (id: string, text: string, author: string, categoryId?: string, fontSize?: number) => void;
+  onDeleteQuote?: (id: string) => void;
   shuffleFavoritesOnly: boolean;
   setShuffleFavoritesOnly: (val: boolean) => void;
   searchPlayList?: Quote[] | null;
@@ -169,6 +170,10 @@ interface ShufflePlayerProps {
   initialQuoteId?: string;
   onClearInitialQuoteId?: () => void;
   onExitZenMode?: () => void;
+  selectedFontId?: string;
+  selectedGreekFontId?: string;
+  fonts?: QuoteFont[];
+  zenTextWidth?: number;
 }
 
 export default function ShufflePlayer({
@@ -177,6 +182,7 @@ export default function ShufflePlayer({
   allQuotes,
   onRateQuote,
   onUpdateQuote,
+  onDeleteQuote,
   shuffleFavoritesOnly,
   setShuffleFavoritesOnly,
   searchPlayList = null,
@@ -185,6 +191,10 @@ export default function ShufflePlayer({
   initialQuoteId,
   onClearInitialQuoteId,
   onExitZenMode,
+  selectedFontId,
+  selectedGreekFontId,
+  fonts = QUOTE_FONTS,
+  zenTextWidth = 85,
 }: ShufflePlayerProps) {
   // Filter quotes. If searchPlayList is active, we play those results.
   // If shuffleFavoritesOnly is active, we play ALL thumbs-up quotes in the system.
@@ -228,7 +238,36 @@ export default function ShufflePlayer({
 
   // States
   const [categoryIndexMap, setCategoryIndexMap] = useState<Record<string, number>>({});
-  const [alternatingFolders, setAlternatingFolders] = useState<boolean>(false);
+  const [alternatingFolders, setAlternatingFolders] = useState<boolean>(() => {
+    try {
+      const currentSelStr = categories
+        .filter((c) => c.isShufflable)
+        .map((c) => c.id)
+        .sort()
+        .join(",");
+      const prevSelStr = localStorage.getItem("quote_shuffle_prev_selection");
+      if (currentSelStr !== prevSelStr) {
+        // It's a new selection! Default to true
+        return true;
+      } else {
+        // It's the same selection! Remember the last option
+        const remembered = localStorage.getItem("quote_shuffle_alternating_folders");
+        return remembered !== null ? remembered === "true" : true;
+      }
+    } catch {
+      return true;
+    }
+  });
+
+  // Make sure we save the selection string in localStorage once the component mounts
+  useEffect(() => {
+    const currentSelStr = categories
+      .filter((c) => c.isShufflable)
+      .map((c) => c.id)
+      .sort()
+      .join(",");
+    localStorage.setItem("quote_shuffle_prev_selection", currentSelStr);
+  }, [categories]);
   const [currentQuoteIndex, setCurrentQuoteIndex] = useState<number>(-1);
   const [history, setHistory] = useState<number[]>([]); // array of indexes in the shufflePool
   const [historyPos, setHistoryPos] = useState<number>(-1); // current position in history array
@@ -251,6 +290,8 @@ export default function ShufflePlayer({
   const [editText, setEditText] = useState<string>("");
   const [editAuthor, setEditAuthor] = useState<string>("");
   const [wasPlayingBeforeEdit, setWasPlayingBeforeEdit] = useState<boolean>(false);
+  const [isDeleting, setIsDeleting] = useState<boolean>(false);
+  const [wasPlayingBeforeDelete, setWasPlayingBeforeDelete] = useState<boolean>(false);
   const [overwriteTarget, setOverwriteTarget] = useState<{ index: number; newGrad: any } | null>(null);
 
   // Context Menu state for right-click text formatting in edit popup
@@ -275,6 +316,52 @@ export default function ShufflePlayer({
       return "#ffffff";
     }
   });
+
+  const [zenContextMenu, setZenContextMenu] = useState<{
+    x: number;
+    y: number;
+    visible: boolean;
+  } | null>(null);
+
+  // Helper to determine quote font size in px
+  const getQuoteFontSize = useCallback((quote: Quote, isZen: boolean) => {
+    if (quote.fontSize) {
+      return isZen ? quote.fontSize : Math.max(14, Math.round(quote.fontSize * 0.65));
+    }
+    
+    const textLength = quote.text.length;
+    if (isZen) {
+      // Base size is larger if the container width preference is larger (less restricted)
+      const baseSize = zenTextWidth >= 80 ? 58 : 52;
+      if (textLength <= 150) {
+        return baseSize;
+      }
+      // A gentler scaling exponent of 0.32 instead of 0.4 ensures longer texts aren't aggressively shrunk
+      return Math.max(18, Math.min(baseSize, Math.round(baseSize * Math.pow(180 / textLength, 0.32))));
+    } else {
+      const baseSize = 32;
+      if (textLength <= 150) {
+        return baseSize;
+      }
+      return Math.max(14, Math.min(baseSize, Math.round(baseSize * Math.pow(150 / textLength, 0.4))));
+    }
+  }, [zenTextWidth]);
+
+  // Close Zen context menu on click anywhere
+  useEffect(() => {
+    const handleGlobalClick = () => {
+      if (zenContextMenu?.visible) {
+        setZenContextMenu(null);
+      }
+    };
+    window.addEventListener("click", handleGlobalClick);
+    return () => window.removeEventListener("click", handleGlobalClick);
+  }, [zenContextMenu]);
+
+  // Close Zen context menu on quote index change
+  useEffect(() => {
+    setZenContextMenu(null);
+  }, [currentQuoteIndex]);
 
   // Custom Gradient states
   const [activeColorTab, setActiveColorTab] = useState<"solid" | "gradient">(() => {
@@ -354,15 +441,15 @@ export default function ShufflePlayer({
     return "";
   });
   const color1InputRef = useRef<HTMLInputElement>(null);
-  const [savedGradients, setSavedGradients] = useState<{name: string; color1: string; color2: string; color3?: string; angle?: number;}[]>(() => {
+  const [savedGradients, setSavedGradients] = useState<{name: string; color1: string; color2: string; color3?: string; angle?: number; textColor?: "black" | "white";}[]>(() => {
     let list = [
-      { name: "Olive Gold", color1: "#554023", color2: "#c99846", angle: 135 },
-      { name: "Twilight Aura", color1: "#1e1b4b", color2: "#4c1d95", angle: 135 },
-      { name: "Deep Forest", color1: "#064e3b", color2: "#15803d", angle: 135 },
-      { name: "Cosmic Nebula", color1: "#311042", color2: "#831843", angle: 135 },
-      { name: "Sunset Horizon", color1: "#fdba74", color2: "#f97316", color3: "#b91c1c", angle: 135 },
-      { name: "Cotton Candy", color1: "#fbcfe8", color2: "#f5d0fe", color3: "#e0f2fe", angle: 135 },
-      { name: "Ocean Breeze", color1: "#1e3a8a", color2: "#0d9488", angle: 135 }
+      { name: "Olive Gold", color1: "#554023", color2: "#c99846", angle: 135, textColor: "white" as const },
+      { name: "Twilight Aura", color1: "#1e1b4b", color2: "#4c1d95", angle: 135, textColor: "white" as const },
+      { name: "Deep Forest", color1: "#064e3b", color2: "#15803d", angle: 135, textColor: "white" as const },
+      { name: "Cosmic Nebula", color1: "#311042", color2: "#831843", angle: 135, textColor: "white" as const },
+      { name: "Sunset Horizon", color1: "#fdba74", color2: "#f97316", color3: "#b91c1c", angle: 135, textColor: "white" as const },
+      { name: "Cotton Candy", color1: "#fbcfe8", color2: "#f5d0fe", color3: "#e0f2fe", angle: 135, textColor: "black" as const },
+      { name: "Ocean Breeze", color1: "#1e3a8a", color2: "#0d9488", angle: 135, textColor: "white" as const }
     ];
     try {
       const stored = localStorage.getItem("quote_shuffle_saved_gradients");
@@ -375,7 +462,49 @@ export default function ShufflePlayer({
     return [...list].sort((a, b) => a.name.localeCompare(b.name));
   });
 
-  const saveGradient = (newGrad: { name: string; color1: string; color2: string; color3?: string; angle: number }, overwriteIndex?: number) => {
+  const [customGradientTextColor, setCustomGradientTextColor] = useState<"black" | "white" | undefined>(() => {
+    try {
+      const storedColor = localStorage.getItem("quote_shuffle_zen_bg_color");
+      if (storedColor && storedColor.startsWith("linear-gradient")) {
+        const storedGradientsStr = localStorage.getItem("quote_shuffle_saved_gradients");
+        const list = storedGradientsStr ? JSON.parse(storedGradientsStr) : [];
+        const matched = list.find((grad: any) => {
+          const angle = grad.angle !== undefined ? grad.angle : 135;
+          const gradStr = grad.color3
+            ? `linear-gradient(${angle}deg, ${grad.color1}, ${grad.color2}, ${grad.color3})`
+            : `linear-gradient(${angle}deg, ${grad.color1}, ${grad.color2})`;
+          return storedColor.toLowerCase() === gradStr.toLowerCase();
+        });
+        if (matched) return matched.textColor;
+      }
+    } catch (e) {}
+    return undefined;
+  });
+
+  const handleUpdateTextColorPreference = (textColor: "black" | "white" | undefined) => {
+    setCustomGradientTextColor(textColor);
+    if (selectedGradIndex !== null && selectedGradIndex < savedGradients.length) {
+      const updated = [...savedGradients];
+      if (textColor) {
+        updated[selectedGradIndex] = {
+          ...updated[selectedGradIndex],
+          textColor
+        };
+      } else {
+        const copy = { ...updated[selectedGradIndex] };
+        delete copy.textColor;
+        updated[selectedGradIndex] = copy;
+      }
+      setSavedGradients(updated);
+      try {
+        localStorage.setItem("quote_shuffle_saved_gradients", JSON.stringify(updated));
+      } catch (err) {
+        console.warn("Failed to save text color preference:", err);
+      }
+    }
+  };
+
+  const saveGradient = (newGrad: { name: string; color1: string; color2: string; color3?: string; angle: number; textColor?: "black" | "white" }, overwriteIndex?: number) => {
     let updated = [...savedGradients];
     if (overwriteIndex !== undefined && overwriteIndex !== -1) {
       updated[overwriteIndex] = newGrad;
@@ -730,6 +859,7 @@ export default function ShufflePlayer({
   }, [isZenMode, showColorPicker, showShortcuts]);
 
   const handleContextMenu = (e: React.MouseEvent<HTMLTextAreaElement>) => {
+    e.stopPropagation();
     const textarea = e.currentTarget;
     const start = textarea.selectionStart;
     const end = textarea.selectionEnd;
@@ -788,7 +918,27 @@ export default function ShufflePlayer({
   const currentCategory = activeQuote
     ? categories.find((c) => c.id === activeQuote.categoryId)
     : null;
-  const isDarkText = getContrastColor(zenBgColor) === "dark";
+  // Find if current zenBgColor matches any of our saved gradients
+  const matchedGradient = useMemo(() => {
+    if (!zenBgColor.startsWith("linear-gradient")) return null;
+    return savedGradients.find((grad) => {
+      const angle = grad.angle !== undefined ? grad.angle : 135;
+      const gradStr = grad.color3
+        ? `linear-gradient(${angle}deg, ${grad.color1}, ${grad.color2}, ${grad.color3})`
+        : `linear-gradient(${angle}deg, ${grad.color1}, ${grad.color2})`;
+      return zenBgColor.toLowerCase() === gradStr.toLowerCase();
+    });
+  }, [zenBgColor, savedGradients]);
+
+  const isDarkText = useMemo(() => {
+    if (matchedGradient && matchedGradient.textColor) {
+      return matchedGradient.textColor === "black";
+    }
+    if (customGradientTextColor) {
+      return customGradientTextColor === "black";
+    }
+    return getContrastColor(zenBgColor) === "dark";
+  }, [matchedGradient, customGradientTextColor, zenBgColor]);
 
   const handleSelectColor = (color: string) => {
     let validColor = color;
@@ -837,6 +987,36 @@ export default function ShufflePlayer({
   };
 
   // Picture-in-Picture logic
+  const activeFont = useMemo(() => {
+    let fid = selectedFontId;
+    if (!fid) {
+       try {
+         fid = localStorage.getItem("quote_shuffle_font_id") || "playfair-display";
+       } catch (e) {
+         fid = "playfair-display";
+       }
+    }
+    return fonts.find((f) => f.id === fid) || fonts[0] || QUOTE_FONTS[0];
+  }, [selectedFontId, fonts]);
+
+  const activeGreekFont = useMemo(() => {
+    let fid = selectedGreekFontId;
+    if (!fid) {
+       try {
+         fid = localStorage.getItem("quote_shuffle_greek_font_id") || "playfair-display";
+       } catch (e) {
+         fid = "playfair-display";
+       }
+    }
+    return fonts.find((f) => f.id === fid) || fonts[0] || QUOTE_FONTS[0];
+  }, [selectedGreekFontId, fonts]);
+
+  const activeQuoteFontCSS = useMemo(() => {
+    if (!activeQuote) return '"Playfair Display", Georgia, serif';
+    const isGreek = isGreekText(activeQuote.text);
+    return isGreek ? activeGreekFont.cssValue : activeFont.cssValue;
+  }, [activeQuote, activeFont, activeGreekFont]);
+
   const pipCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const pipVideoRef = useRef<HTMLVideoElement | null>(null);
   const [isPipActive, setIsPipActive] = useState<boolean>(false);
@@ -857,11 +1037,17 @@ export default function ShufflePlayer({
 
     // Fill background with current background color
     if (zenBgColor.startsWith("linear-gradient")) {
-      const { color1, color2, angleDeg } = parseGradient(zenBgColor);
+      const { color1, color2, color3, angleDeg } = parseGradient(zenBgColor);
       const coords = getGradientCoords(angleDeg, width, height);
       const grad = ctx.createLinearGradient(coords.x0, coords.y0, coords.x1, coords.y1);
-      grad.addColorStop(0, color1);
-      grad.addColorStop(1, color2);
+      if (color3) {
+        grad.addColorStop(0, color1);
+        grad.addColorStop(0.5, color2);
+        grad.addColorStop(1, color3);
+      } else {
+        grad.addColorStop(0, color1);
+        grad.addColorStop(1, color2);
+      }
       ctx.fillStyle = grad;
     } else {
       ctx.fillStyle = zenBgColor;
@@ -977,9 +1163,8 @@ export default function ShufflePlayer({
 
     const getFontString = (t: WordToken) => {
       const boldStyle = (t.isBold || t.isHighlight) ? "bold " : "";
-      // PiP canvas defaults to an italic styling for the quote body
-      const italicStyle = "italic ";
-      return `${boldStyle}${italicStyle}32px Georgia, serif`;
+      const italicStyle = t.isItalic ? "italic " : "";
+      return `${boldStyle}${italicStyle}32px ${activeQuoteFontCSS}`;
     };
 
     // Word wrapping
@@ -1072,13 +1257,13 @@ export default function ShufflePlayer({
       }
     }
 
-    // Draw the author
-    const authorText = `— ${activeQuote.author || "Unknown"}`;
-    ctx.font = "bold 20px sans-serif";
+    // Draw the author (uppercase to match the slideshow styling)
+    const authorText = `— ${activeQuote.author || "Unknown"}`.toUpperCase();
+    ctx.font = 'bold 20px "Inter", sans-serif';
     ctx.textAlign = "center";
     ctx.fillStyle = isDarkText ? "#78350f" : "#fbbf24"; // amber-900 or amber-400
     ctx.fillText(authorText, width / 2, startY + totalHeight + 40);
-  }, [activeQuote, zenBgColor, isDarkText]);
+  }, [activeQuote, zenBgColor, isDarkText, activeQuoteFontCSS]);
 
   // Redraw PiP canvas when dependencies change
   useEffect(() => {
@@ -1554,6 +1739,28 @@ export default function ShufflePlayer({
     }
   };
 
+  const handleDeleteActiveQuote = () => {
+    if (!activeQuote) return;
+
+    safeCancelSpeech();
+    setIsSpeaking(false);
+
+    if (onDeleteQuote) {
+      onDeleteQuote(activeQuote.id);
+    }
+
+    setIsDeleting(false);
+
+    if (shufflePool.length <= 1) {
+      setIsZenMode(false);
+      setIsPlaying(false);
+    } else if (wasPlayingBeforeDelete) {
+      setTimeout(() => {
+        setIsPlaying(true);
+      }, 200);
+    }
+  };
+
   // Clean speech on unmount
   useEffect(() => {
     return () => {
@@ -1617,7 +1824,11 @@ export default function ShufflePlayer({
           <button
             id="toggle-alternating-folders-btn"
             disabled={isAlternatingFoldersDisabled}
-            onClick={() => setAlternatingFolders(!alternatingFolders)}
+            onClick={() => {
+              const nextVal = !alternatingFolders;
+              setAlternatingFolders(nextVal);
+              localStorage.setItem("quote_shuffle_alternating_folders", String(nextVal));
+            }}
             className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold transition-all border ${
               isAlternatingFoldersDisabled
                 ? "bg-stone-50 border-stone-150 text-stone-350 cursor-not-allowed opacity-50"
@@ -1883,6 +2094,20 @@ export default function ShufflePlayer({
                   >
                     <Pencil className="w-4 h-4" />
                   </button>
+
+                  {/* Delete active quote from slide */}
+                  <button
+                    id="delete-quote-btn-slideshow"
+                    onClick={() => {
+                      setWasPlayingBeforeDelete(isPlaying);
+                      setIsPlaying(false);
+                      setIsDeleting(true);
+                    }}
+                    className="p-2 text-stone-400 hover:text-red-600 hover:bg-stone-100 rounded-xl transition-all cursor-pointer"
+                    title="Delete Quote"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
                 </div>
               </div>
 
@@ -1891,8 +2116,11 @@ export default function ShufflePlayer({
                 <blockquote
                   id="quote-text-serif"
                   data-quote-id={activeQuote.id}
-                  className="font-quote text-xl md:text-3xl lg:text-4xl text-stone-800 font-medium leading-relaxed md:leading-normal select-text cursor-text selection:bg-amber-200/80"
-                  style={{ "--quote-font": isGreekText(activeQuote.text) ? "var(--quote-font-el)" : "var(--quote-font-en)" } as React.CSSProperties}
+                  className="font-quote text-stone-800 font-medium leading-relaxed md:leading-normal select-text cursor-text selection:bg-amber-200/80"
+                  style={{ 
+                    "--quote-font": isGreekText(activeQuote.text) ? "var(--quote-font-el)" : "var(--quote-font-en)",
+                    fontSize: `${getQuoteFontSize(activeQuote, false)}px`
+                  } as React.CSSProperties}
                 >
                   "{renderFormattedText(activeQuote.text)}"
                 </blockquote>
@@ -2067,6 +2295,14 @@ export default function ShufflePlayer({
             className={`fixed inset-0 z-[120] flex flex-col justify-between p-6 md:p-14 select-none touch-manipulation transition-all duration-300 ${
               isDarkText ? "text-stone-900 animate-fade-in" : "text-stone-100 animate-fade-in"
             } ${!isControlsVisible ? "cursor-none" : ""}`}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              setZenContextMenu({
+                x: e.clientX,
+                y: e.clientY,
+                visible: true
+              });
+            }}
           >
             {/* Absolute Left & Right Navigation Click Hotspots (Behind controls, covering rest of screen) */}
             <div className="absolute inset-0 z-0 flex pointer-events-auto">
@@ -2431,6 +2667,7 @@ export default function ShufflePlayer({
                                         }
                                         setCustomGradientAngle(angle);
                                         setNewGradientName(grad.name);
+                                        setCustomGradientTextColor(grad.textColor);
                                       }}
                                       className={`flex items-center justify-between p-1.5 rounded-xl border transition-all cursor-pointer text-xs ${
                                         isSelected
@@ -2543,7 +2780,7 @@ export default function ShufflePlayer({
                                   (g) => g.name.toLowerCase() === trimmedName.toLowerCase()
                                 );
 
-                                const newGrad: { name: string; color1: string; color2: string; color3?: string; angle: number } = {
+                                const newGrad: { name: string; color1: string; color2: string; color3?: string; angle: number; textColor?: "black" | "white" } = {
                                   name: trimmedName,
                                   color1: gradientColor1,
                                   color2: gradientColor2,
@@ -2551,6 +2788,9 @@ export default function ShufflePlayer({
                                 };
                                 if (useColor3) {
                                   newGrad.color3 = gradientColor3;
+                                }
+                                if (customGradientTextColor) {
+                                  newGrad.textColor = customGradientTextColor;
                                 }
 
                                 if (existingIndex !== -1) {
@@ -2757,6 +2997,46 @@ export default function ShufflePlayer({
                                 )}
                               </div>
 
+                              {/* Text Color preference selection */}
+                              <div className="flex flex-col gap-1 mt-1">
+                                <span className="text-[10px] font-semibold text-stone-400 uppercase">Text Color Preference</span>
+                                <div className="flex bg-stone-100 dark:bg-stone-900 rounded-lg p-0.5 border border-stone-200 dark:border-stone-800 text-[10px] font-bold">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleUpdateTextColorPreference(undefined)}
+                                    className={`flex-1 py-1 rounded-md transition-all cursor-pointer ${
+                                      customGradientTextColor === undefined
+                                        ? "bg-amber-500 text-white shadow-xs font-black"
+                                        : "text-stone-500 hover:text-stone-800 dark:hover:text-stone-200"
+                                    }`}
+                                  >
+                                    Auto
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleUpdateTextColorPreference("black")}
+                                    className={`flex-1 py-1 rounded-md transition-all cursor-pointer ${
+                                      customGradientTextColor === "black"
+                                        ? "bg-stone-900 text-white dark:bg-stone-100 dark:text-stone-900 shadow-xs font-black"
+                                        : "text-stone-500 hover:text-stone-800 dark:hover:text-stone-200"
+                                    }`}
+                                  >
+                                    Black
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleUpdateTextColorPreference("white")}
+                                    className={`flex-1 py-1 rounded-md transition-all cursor-pointer ${
+                                      customGradientTextColor === "white"
+                                        ? "bg-stone-900 text-white dark:bg-stone-100 dark:text-stone-900 shadow-xs font-black"
+                                        : "text-stone-500 hover:text-stone-800 dark:hover:text-stone-200"
+                                    }`}
+                                  >
+                                    White
+                                  </button>
+                                </div>
+                              </div>
+
                               {/* Save Section */}
                               <div className="flex flex-col gap-0.5">
                                 <span className="text-[9px] text-stone-400 font-semibold">Save with Name</span>
@@ -2960,6 +3240,24 @@ export default function ShufflePlayer({
                   <Pencil className="w-4 h-4" />
                 </button>
 
+                {/* Delete active quote from Zen Mode */}
+                <button
+                  id="zen-delete-btn"
+                  onClick={() => {
+                    setWasPlayingBeforeDelete(isPlaying);
+                    setIsPlaying(false);
+                    setIsDeleting(true);
+                  }}
+                  className={`p-2.5 rounded-xl transition-all border cursor-pointer ${
+                    isDarkText
+                      ? "border-stone-300 hover:bg-stone-200 text-stone-700 hover:text-red-600 hover:border-red-200 hover:bg-red-50"
+                      : "border-stone-800 hover:bg-stone-900 text-stone-300 hover:text-red-400 hover:border-red-950 hover:bg-red-950/20"
+                  }`}
+                  title="Delete Quote"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+
                 {/* Float Quotes Button inside Zen */}
                 <button
                   id="zen-pip-btn"
@@ -2993,7 +3291,10 @@ export default function ShufflePlayer({
             </motion.div>
 
             {/* Fullscreen Quote Box - Beautiful giant serif statement */}
-            <div className="flex-1 flex flex-col justify-center max-w-5xl mx-auto w-full relative pointer-events-none">
+            <div 
+              className="flex-1 flex flex-col justify-center mx-auto w-full relative pointer-events-none transition-all duration-300"
+              style={{ maxWidth: `${zenTextWidth}%` }}
+            >
               {/* Giant abstract watermark quotes */}
               <div
                 style={{ color: isDarkText ? "rgba(0,0,0,0.06)" : "rgba(255,255,255,0.06)" }}
@@ -3013,8 +3314,11 @@ export default function ShufflePlayer({
                 >
                   <blockquote
                     id="zen-quote-text"
-                    className="font-quote text-2xl md:text-5xl lg:text-6xl font-medium leading-relaxed tracking-tight"
-                    style={{ "--quote-font": isGreekText(activeQuote.text) ? "var(--quote-font-el)" : "var(--quote-font-en)" } as React.CSSProperties}
+                    className="font-quote font-medium leading-relaxed tracking-tight"
+                    style={{ 
+                      "--quote-font": isGreekText(activeQuote.text) ? "var(--quote-font-el)" : "var(--quote-font-en)",
+                      fontSize: `${getQuoteFontSize(activeQuote, true)}px`
+                    } as React.CSSProperties}
                   >
                     "{renderFormattedText(activeQuote.text)}"
                   </blockquote>
@@ -3160,6 +3464,89 @@ export default function ShufflePlayer({
                 />
               </motion.div>
             )}
+
+            {/* Right click menu for custom font size adjustment */}
+            {zenContextMenu?.visible && (
+              <div
+                id="zen-font-context-menu"
+                className={`absolute border rounded-2xl shadow-xl p-4.5 z-[250] text-left w-[280px] animate-fade-in ${
+                  isDarkText 
+                    ? "bg-white/95 backdrop-blur-md border-stone-200 text-stone-800" 
+                    : "bg-stone-900/95 backdrop-blur-md border-stone-800 text-stone-100"
+                }`}
+                style={{
+                  top: `${Math.min(window.innerHeight - 180, zenContextMenu.y)}px`,
+                  left: `${Math.min(window.innerWidth - 300, zenContextMenu.x)}px`,
+                }}
+                onClick={(e) => e.stopPropagation()}
+                onContextMenu={(e) => e.preventDefault()}
+              >
+                <div className="flex items-center justify-between mb-3 border-b pb-2 border-stone-550/10">
+                  <span className="text-xs font-bold font-sans uppercase tracking-wider flex items-center gap-1.5">
+                    <Type className="w-3.5 h-3.5 text-amber-500 animate-pulse" />
+                    Adjust Font Size
+                  </span>
+                  <button
+                    onClick={() => setZenContextMenu(null)}
+                    className="p-1 hover:bg-stone-500/10 rounded-lg cursor-pointer text-stone-400 hover:text-stone-200 text-xs leading-none"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                <div className="space-y-3.5">
+                  {/* Display current font size info */}
+                  <div className="flex items-center justify-between text-[11px] font-mono">
+                    <span className="opacity-60">Current Size:</span>
+                    <span className="font-bold text-amber-500">
+                      {getQuoteFontSize(activeQuote, true)}px
+                      {activeQuote.fontSize ? " (Locked)" : " (Auto)"}
+                    </span>
+                  </div>
+
+                  {/* Range Slider */}
+                  <div className="space-y-1">
+                    <div className="flex justify-between text-[10px] opacity-50 font-sans">
+                      <span>Small (16px)</span>
+                      <span>Large (96px)</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="16"
+                      max="96"
+                      value={getQuoteFontSize(activeQuote, true)}
+                      onChange={(e) => {
+                        const size = parseInt(e.target.value, 10);
+                        if (onUpdateQuote) {
+                          onUpdateQuote(activeQuote.id, activeQuote.text, activeQuote.author, activeQuote.categoryId, size);
+                        }
+                      }}
+                      className="w-full accent-amber-500 h-1.5 bg-stone-500/20 rounded-lg appearance-none cursor-pointer"
+                    />
+                  </div>
+
+                  {/* Mode Indicator / Actions */}
+                  <div className="flex items-center justify-between pt-1">
+                    <span className="text-[10px] opacity-60">
+                      {activeQuote.fontSize ? "Manual Size Locked" : "Auto-Scaling Mode"}
+                    </span>
+                    {activeQuote.fontSize && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (onUpdateQuote) {
+                            onUpdateQuote(activeQuote.id, activeQuote.text, activeQuote.author, activeQuote.categoryId, -1);
+                          }
+                        }}
+                        className="text-[10px] bg-amber-500/10 hover:bg-amber-500/20 text-amber-500 font-bold px-2 py-1 rounded-lg cursor-pointer transition-colors"
+                      >
+                        Reset to Auto
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
           </motion.div>
         )}
       </AnimatePresence>
@@ -3194,14 +3581,20 @@ export default function ShufflePlayer({
 
             <div className="flex flex-col gap-4">
               <div className="flex flex-col gap-1.5">
-                <label htmlFor="player-edit-textarea" className="text-xs font-bold uppercase tracking-wider text-stone-500">
-                  Quote Text
-                </label>
+                <div className="flex items-center justify-between text-xs font-semibold text-stone-500">
+                  <label htmlFor="player-edit-textarea" className="font-sans uppercase tracking-wider text-[10px]">
+                    Quote Text
+                  </label>
+                  <span className="text-[10px] font-mono opacity-65">
+                    {editText.length}/700
+                  </span>
+                </div>
                 <textarea
                   id="player-edit-textarea"
                   value={editText}
                   onChange={(e) => setEditText(e.target.value)}
                   onContextMenu={handleContextMenu}
+                  maxLength={700}
                   className="w-full text-sm bg-stone-50 border border-stone-300 rounded-xl px-4 py-3 text-stone-800 placeholder-stone-400 focus:outline-none focus:bg-white focus:border-amber-600 focus:ring-1 focus:ring-amber-600 transition-all resize-none font-serif italic"
                   rows={4}
                   placeholder="Highlight text and right-click to format!"
@@ -3294,6 +3687,63 @@ export default function ShufflePlayer({
                 className="px-5 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-semibold cursor-pointer transition-colors shadow-xs"
               >
                 Overwrite
+              </button>
+            </div>
+          </motion.div>
+        </div>
+      )}
+
+      {/* Delete Quote Confirmation Modal */}
+      {isDeleting && activeQuote && (
+        <div className="fixed inset-0 z-[220] flex items-center justify-center p-4 bg-stone-900/60 backdrop-blur-md">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95, y: 12 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            className="w-full max-w-md bg-white dark:bg-stone-900 rounded-3xl p-6 shadow-2xl border border-stone-200 dark:border-stone-800"
+          >
+            <div className="flex items-center gap-3 border-b border-stone-100 dark:border-stone-800 pb-3 mb-4">
+              <div className="p-2 rounded-full bg-red-50 dark:bg-red-950/50">
+                <AlertTriangle className="w-5 h-5 text-red-600 dark:text-red-400" />
+              </div>
+              <h3 className="font-sans font-bold text-lg text-stone-900 dark:text-stone-100">
+                Delete Quote?
+              </h3>
+            </div>
+
+            <p className="text-sm text-stone-600 dark:text-stone-300 mb-4 leading-relaxed">
+              Are you sure you want to delete this quote? This action is permanent and cannot be undone.
+            </p>
+
+            <div className="p-3 bg-stone-50 dark:bg-stone-850 rounded-2xl border border-stone-100 dark:border-stone-800 mb-6 max-h-32 overflow-y-auto">
+              <p className="text-xs italic text-stone-500 dark:text-stone-400 font-serif leading-relaxed">
+                "{stripFormatTags(activeQuote.text)}"
+              </p>
+              {activeQuote.author && (
+                <p className="text-[10px] text-stone-400 dark:text-stone-500 font-mono mt-1 text-right">
+                  — {activeQuote.author}
+                </p>
+              )}
+            </div>
+
+            <div className="flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsDeleting(false);
+                  if (wasPlayingBeforeDelete) {
+                    setIsPlaying(true);
+                  }
+                }}
+                className="px-4 py-2 text-stone-500 hover:text-stone-700 dark:text-stone-400 dark:hover:text-stone-200 bg-stone-50 hover:bg-stone-100 dark:bg-stone-800 dark:hover:bg-stone-750 border border-stone-200 dark:border-stone-700 rounded-xl text-xs font-semibold cursor-pointer transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleDeleteActiveQuote}
+                className="px-5 py-2 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-semibold cursor-pointer transition-colors shadow-xs animate-fade-in"
+              >
+                Delete
               </button>
             </div>
           </motion.div>

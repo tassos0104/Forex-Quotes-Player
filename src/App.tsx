@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Category, Quote, Folder, QUOTE_FONTS } from "./types";
+import { Category, Quote, Folder, QUOTE_FONTS, QuoteFont } from "./types";
 import { DEFAULT_CATEGORIES, DEFAULT_QUOTES } from "./defaultData";
 import Sidebar from "./components/Sidebar";
 import ShufflePlayer from "./components/ShufflePlayer";
@@ -99,6 +99,68 @@ export default function App() {
     return localStorage.getItem("quote_shuffle_greek_font_id") || "gfs-didot";
   });
 
+  const [zenTextWidth, setZenTextWidth] = useState<number>(() => {
+    return Number(localStorage.getItem("quote_shuffle_zen_text_width")) || 85;
+  });
+
+  useEffect(() => {
+    localStorage.setItem("quote_shuffle_zen_text_width", String(zenTextWidth));
+  }, [zenTextWidth]);
+
+  const [fonts, setFonts] = useState<QuoteFont[]>(() => {
+    try {
+      const stored = localStorage.getItem("quote_shuffle_custom_fonts");
+      if (stored) {
+        return JSON.parse(stored);
+      }
+    } catch (e) {
+      console.error("Could not load custom fonts, using default.", e);
+    }
+    return QUOTE_FONTS;
+  });
+
+  const handleAddFont = (newFont: QuoteFont) => {
+    setFonts((prev) => {
+      const updated = [...prev, newFont];
+      try {
+        localStorage.setItem("quote_shuffle_custom_fonts", JSON.stringify(updated));
+      } catch (e) {
+        console.warn("Could not save fonts to localStorage:", e);
+      }
+      return updated;
+    });
+  };
+
+  const handleDeleteFont = (id: string) => {
+    setFonts((prev) => {
+      const updated = prev.filter((f) => f.id !== id);
+      try {
+        localStorage.setItem("quote_shuffle_custom_fonts", JSON.stringify(updated));
+      } catch (e) {
+        console.warn("Could not save fonts to localStorage:", e);
+      }
+      return updated;
+    });
+
+    if (selectedFontId === id) {
+      setSelectedFontId("playfair-display");
+    }
+    if (selectedGreekFontId === id) {
+      setSelectedGreekFontId("gfs-didot");
+    }
+  };
+
+  const handleResetFonts = () => {
+    setFonts(QUOTE_FONTS);
+    try {
+      localStorage.removeItem("quote_shuffle_custom_fonts");
+    } catch (e) {
+      console.warn("Could not reset fonts in localStorage:", e);
+    }
+    setSelectedFontId("playfair-display");
+    setSelectedGreekFontId("gfs-didot");
+  };
+
   const [previewEn, setPreviewEn] = useState<string>(() => {
     return localStorage.getItem("quote_shuffle_preview_en") || "True wisdom comes to each of us when we realize how little we understand about life, ourselves, and the world around us.";
   });
@@ -135,7 +197,7 @@ export default function App() {
       console.warn("Could not save font setting to localStorage:", e);
     }
 
-    const selectedFont = QUOTE_FONTS.find((f) => f.id === selectedFontId);
+    const selectedFont = fonts.find((f) => f.id === selectedFontId);
     if (selectedFont) {
       const fontLinkId = `google-font-${selectedFont.id}`;
       if (!document.getElementById(fontLinkId)) {
@@ -147,7 +209,7 @@ export default function App() {
         document.head.appendChild(link);
       }
     }
-  }, [selectedFontId]);
+  }, [selectedFontId, fonts]);
 
   // Load selected Greek Google font dynamically and save choice
   useEffect(() => {
@@ -157,7 +219,7 @@ export default function App() {
       console.warn("Could not save Greek font setting to localStorage:", e);
     }
 
-    const selectedFont = QUOTE_FONTS.find((f) => f.id === selectedGreekFontId);
+    const selectedFont = fonts.find((f) => f.id === selectedGreekFontId);
     if (selectedFont) {
       const fontLinkId = `google-font-${selectedFont.id}`;
       if (!document.getElementById(fontLinkId)) {
@@ -169,7 +231,7 @@ export default function App() {
         document.head.appendChild(link);
       }
     }
-  }, [selectedGreekFontId]);
+  }, [selectedGreekFontId, fonts]);
 
 
   // Persist state updates to LocalStorage
@@ -440,9 +502,20 @@ export default function App() {
     );
   };
 
-  const handleUpdateQuote = (id: string, text: string, author: string, categoryId?: string) => {
+  const handleUpdateQuote = (id: string, text: string, author: string, categoryId?: string, fontSize?: number) => {
     setQuotes((prev) =>
-      prev.map((q) => (q.id === id ? { ...q, text, author, categoryId: categoryId ?? q.categoryId } : q))
+      prev.map((q) => {
+        if (q.id === id) {
+          const updated = { ...q, text, author, categoryId: categoryId ?? q.categoryId };
+          if (fontSize === -1) {
+            delete updated.fontSize;
+          } else if (fontSize !== undefined) {
+            updated.fontSize = fontSize;
+          }
+          return updated;
+        }
+        return q;
+      })
     );
   };
 
@@ -560,8 +633,8 @@ export default function App() {
   // Derived properties
   const activeCategory = categories.find((c) => c.id === activeCategoryId);
   const filteredQuotes = quotes.filter((q) => q.categoryId === activeCategoryId);
-  const activeFont = QUOTE_FONTS.find((f) => f.id === selectedFontId) || QUOTE_FONTS[0];
-  const activeGreekFont = QUOTE_FONTS.find((f) => f.id === selectedGreekFontId) || QUOTE_FONTS[0];
+  const activeFont = fonts.find((f) => f.id === selectedFontId) || fonts[0] || QUOTE_FONTS[0];
+  const activeGreekFont = fonts.find((f) => f.id === selectedGreekFontId) || fonts[0] || QUOTE_FONTS[0];
 
   return (
     <div
@@ -776,6 +849,7 @@ export default function App() {
               allQuotes={quotes}
               onRateQuote={handleRateQuote}
               onUpdateQuote={handleUpdateQuote}
+              onDeleteQuote={handleDeleteQuote}
               shuffleFavoritesOnly={shuffleFavoritesOnly}
               setShuffleFavoritesOnly={setShuffleFavoritesOnly}
               searchPlayList={activeSearchPlayList}
@@ -788,9 +862,13 @@ export default function App() {
               onClearInitialQuoteId={() => setInitialQuoteId(null)}
               onExitZenMode={() => {
                 if (initialQuoteId) {
-                  setActiveTab("manage");
+                   setActiveTab("manage");
                 }
               }}
+              selectedFontId={selectedFontId}
+              selectedGreekFontId={selectedGreekFontId}
+              fonts={fonts}
+              zenTextWidth={zenTextWidth}
             />
           ) : activeTab === "admin" ? (
             <AdminPanel
@@ -808,6 +886,12 @@ export default function App() {
               onSelectGreekFontId={setSelectedGreekFontId}
               previewEn={previewEn}
               previewEl={previewEl}
+              fonts={fonts}
+              onAddFont={handleAddFont}
+              onDeleteFont={handleDeleteFont}
+              onResetFonts={handleResetFonts}
+              zenTextWidth={zenTextWidth}
+              onSelectZenTextWidth={setZenTextWidth}
             />
           ) : activeCategory ? (
             <QuoteManager

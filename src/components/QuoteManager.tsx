@@ -318,6 +318,7 @@ export default function QuoteManager({
   };
 
   const handleContextMenu = (e: React.MouseEvent<HTMLTextAreaElement>) => {
+    e.stopPropagation();
     const textarea = e.currentTarget;
     const start = textarea.selectionStart;
     const end = textarea.selectionEnd;
@@ -437,7 +438,7 @@ export default function QuoteManager({
     setCategoryNameError("");
   };
 
-  const maxTextLength = 280;
+  const maxTextLength = 700;
   const maxAuthorLength = 40;
 
   const handleStartEdit = (q: Quote) => {
@@ -1138,6 +1139,7 @@ export default function QuoteManager({
                   if (error) setError("");
                 }}
                 onContextMenu={handleContextMenu}
+                maxLength={maxTextLength}
                 className="w-full text-sm bg-stone-50 border border-stone-300 rounded-xl px-4 py-3 text-stone-800 placeholder-stone-400 focus:outline-none focus:bg-white focus:border-amber-600 focus:ring-1 focus:ring-amber-600 transition-all resize-none"
               />
               {realTimeDuplicate && (
@@ -1398,7 +1400,13 @@ export default function QuoteManager({
                     onDragEnd={handleDragEnd}
                     onDrop={(e) => handleDrop(e, q.id)}
                     onClick={(e) => handleQuoteClick(e, q.id)}
-                    onContextMenu={(e) => handleRowContextMenu(e, q.id)}
+                    onContextMenu={(e) => {
+                      if (editingQuoteId === q.id) {
+                        e.stopPropagation();
+                        return;
+                      }
+                      handleRowContextMenu(e, q.id);
+                    }}
                     className={`relative group border rounded-xl p-4 md:p-5 flex flex-col gap-3.5 transition-all ${
                       selectedQuoteIds.includes(q.id)
                         ? "border-amber-500 bg-amber-50/20 shadow-xs"
@@ -1422,7 +1430,16 @@ export default function QuoteManager({
                       <div className="absolute bottom-0 left-0 right-0 h-1 bg-amber-500 rounded-full z-10 animate-pulse" />
                     )}
                     {editingQuoteId === q.id ? (
-                      <form onSubmit={(e) => handleSaveEdit(e, q.id)} className="flex-1 flex flex-col gap-3 w-full">
+                      <form
+                        onSubmit={(e) => handleSaveEdit(e, q.id)}
+                        onClick={(e) => {
+                          if (contextMenu?.visible) {
+                            setContextMenu(null);
+                          }
+                          e.stopPropagation();
+                        }}
+                        className="flex-1 flex flex-col gap-3 w-full"
+                      >
                         <div className="flex flex-col gap-1 w-full">
                           <textarea
                             id={`edit-quote-textarea-${q.id}`}
@@ -1946,7 +1963,7 @@ export default function QuoteManager({
             }}
             className="flex items-center gap-2 px-2.5 py-1.5 text-red-750 hover:bg-red-50 rounded-xl text-left font-sans text-xs font-bold cursor-pointer transition-colors"
           >
-            <Trash2 className="w-3.5 h-3.5 text-red-650" />
+            <Trash2 className="w-3.5 h-3.5 text-red-600" />
             <span>Delete</span>
           </button>
         </div>
