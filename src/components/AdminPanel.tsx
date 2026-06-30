@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import { Quote, Category, QUOTE_FONTS, QuoteFont } from "../types";
-import { ShieldAlert, Trash2, RotateCcw, Search, Filter, ArrowLeft, BookOpen, ThumbsDown, ThumbsUp, Play, Type, Plus } from "lucide-react";
+import { ShieldAlert, Trash2, RotateCcw, Search, Filter, ArrowLeft, BookOpen, ThumbsDown, ThumbsUp, Play, Type, Plus, Star, Copy } from "lucide-react";
 import { renderFormattedText, stripFormatTags } from "../utils/textFormatter";
 
 interface AdminPanelProps {
@@ -22,6 +22,8 @@ interface AdminPanelProps {
   onResetFonts?: () => void;
   zenTextWidth?: number;
   onSelectZenTextWidth?: (width: number) => void;
+  favoriteFontIds?: string[];
+  onToggleFavoriteFont?: (id: string) => void;
 }
 
 export default function AdminPanel({
@@ -38,6 +40,8 @@ export default function AdminPanel({
   previewEn = "True wisdom comes to each of us when we realize how little we understand about life, ourselves, and the world around us.",
   previewEl = "Η αληθινή σοφία έρχεται στον καθένα μας όταν συνειδητοποιήσουμε πόσο λίγο κατανοούμε τη ζωή, τον εαυτό μας και τον κόσμο γύρω μας.",
   fonts = QUOTE_FONTS,
+  favoriteFontIds = [],
+  onToggleFavoriteFont,
   onAddFont,
   onDeleteFont,
   onResetFonts,
@@ -54,6 +58,55 @@ export default function AdminPanel({
   const [newFontName, setNewFontName] = useState("");
   const [addError, setAddError] = useState("");
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+
+  const fontInputRef = useRef<HTMLInputElement>(null);
+  const [modalPreviewFontSize, setModalPreviewFontSize] = useState<number>(18);
+
+  const isAlreadyInstalled = useMemo(() => {
+    const nameTrimmed = newFontName.trim();
+    if (!nameTrimmed) return false;
+    
+    let mappedName = nameTrimmed;
+    const lowerName = nameTrimmed.toLowerCase();
+    if (lowerName.startsWith("playwrite ")) {
+      const suffix = lowerName.substring(10).trim();
+      const countriesMap: Record<string, string> = {
+        "new zealand": "NZ",
+        "united states": "US",
+        "united kingdom": "GB",
+        "great britain": "GB",
+        "england": "GB",
+        "australia": "AU",
+        "canada": "CA",
+        "germany": "DE",
+        "indonesia": "ID",
+        "iceland": "IS",
+        "italy": "IT",
+        "croatia": "HR",
+        "mexico": "MX",
+        "norway": "NO",
+        "poland": "PL",
+        "romania": "RO",
+        "tanzania": "TZ",
+        "vietnam": "VN",
+        "south africa": "ZA"
+      };
+      if (countriesMap[suffix]) {
+        mappedName = `Playwrite ${countriesMap[suffix]}`;
+      }
+    }
+
+    const fontId = mappedName.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    return (fonts || []).some(f => f.id === fontId);
+  }, [newFontName, fonts]);
+
+  useEffect(() => {
+    if (showAddForm) {
+      setTimeout(() => {
+        fontInputRef.current?.focus();
+      }, 50);
+    }
+  }, [showAddForm]);
   const [fontIdToDeleteConfirm, setFontIdToDeleteConfirm] = useState<string | null>(null);
   const [showResetFontsConfirm, setShowResetFontsConfirm] = useState(false);
   const [fontSort, setFontSort] = useState<'alphabetical' | 'last-added'>('last-added');
@@ -193,6 +246,36 @@ export default function AdminPanel({
   const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false);
   const [bulkResetConfirm, setBulkResetConfirm] = useState(false);
   const [quoteIdToDeleteConfirm, setQuoteIdToDeleteConfirm] = useState<string | null>(null);
+
+  // States for confirming whether to apply newly imported font
+  const [showApplyFontConfirm, setShowApplyFontConfirm] = useState(false);
+  const [importedFontId, setImportedFontId] = useState<string | null>(null);
+  const [importedFontName, setImportedFontName] = useState<string>("");
+  const [previousFontId, setPreviousFontId] = useState<string>("");
+  const [previousGreekFontId, setPreviousGreekFontId] = useState<string>("");
+
+  // States for confirming applying Greek font to English as well
+  const [showApplyGreekToEnglishConfirm, setShowApplyGreekToEnglishConfirm] = useState(false);
+  const [targetGreekFontId, setTargetGreekFontId] = useState<string | null>(null);
+
+  // Load dynamic font stylesheet for previewing on demand
+  useEffect(() => {
+    const fontIdToLoad = targetGreekFontId || importedFontId;
+    if (!fontIdToLoad) return;
+    
+    const font = fonts.find(f => f.id === fontIdToLoad);
+    if (font) {
+      const fontLinkId = `google-font-preview-${font.id}`;
+      if (!document.getElementById(fontLinkId)) {
+        const link = document.createElement("link");
+        link.id = fontLinkId;
+        link.rel = "stylesheet";
+        const encodedFamily = encodeURIComponent(font.family);
+        link.href = `https://fonts.googleapis.com/css2?family=${encodedFamily}&display=swap`;
+        document.head.appendChild(link);
+      }
+    }
+  }, [targetGreekFontId, importedFontId, fonts]);
 
   // Filter quotes based on rating
   const flaggedQuotes = quotes.filter((q) => q.rating === "down");
@@ -373,7 +456,7 @@ export default function AdminPanel({
       {adminTab === 'fonts' ? (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 animate-fade-in mb-8">
           {/* Left Panel: Font Cards Selection List (One Column) */}
-          <div className="lg:col-span-4 space-y-4">
+          <div className="lg:col-span-4 space-y-4 lg:sticky lg:top-6 lg:self-start">
             {/* Add Font & Reset Defaults Header Actions */}
             <div className="flex items-center justify-between gap-2">
               <button
@@ -435,6 +518,7 @@ export default function AdminPanel({
                 <div className="space-y-1">
                   <label className="text-[10px] font-bold text-stone-400 uppercase tracking-wider block">Font Family Name</label>
                   <input
+                    ref={fontInputRef}
                     type="text"
                     value={newFontName}
                     onChange={(e) => {
@@ -442,11 +526,18 @@ export default function AdminPanel({
                       setAddError("");
                     }}
                     placeholder="e.g. Space Grotesk"
-                    className="w-full px-3 py-1.5 text-xs bg-white border border-stone-250 rounded-xl focus:outline-none focus:ring-1 focus:ring-amber-600 focus:border-amber-600 transition-all text-stone-850"
+                    className={`w-full px-3 py-1.5 text-xs bg-white border rounded-xl focus:outline-none focus:ring-1 transition-all ${
+                      isAlreadyInstalled
+                        ? "text-red-600 border-red-300 focus:border-red-500 focus:ring-red-500"
+                        : "text-stone-850 border-stone-250 focus:border-amber-600 focus:ring-amber-600"
+                    }`}
                   />
+                  {isAlreadyInstalled && (
+                    <p className="text-[10px] text-red-650 font-bold animate-fade-in mt-1">This font is already installed!</p>
+                  )}
                 </div>
 
-                {addError && (
+                {addError && !isAlreadyInstalled && (
                   <p className="text-[10px] text-red-600 font-bold">{addError}</p>
                 )}
 
@@ -519,15 +610,18 @@ export default function AdminPanel({
                         supportsGreek: true
                       };
 
+                      // Save previous selection to restore if rejected
+                      setPreviousFontId(selectedFontId);
+                      setPreviousGreekFontId(selectedGreekFontId);
+                      setImportedFontId(fontId);
+                      setImportedFontName(mappedName);
+
                       onAddFont?.(newFont);
                       onSelectFontId?.(fontId);
                       onSelectGreekFontId?.(fontId);
                       setFontSearch("");
 
-                      setSuccessMessage(`Font "${mappedName}" successfully imported and selected!`);
-                      setTimeout(() => {
-                        setSuccessMessage(null);
-                      }, 4000);
+                      setShowApplyFontConfirm(true);
 
                       setShowAddForm(false);
                       setNewFontName("");
@@ -541,7 +635,12 @@ export default function AdminPanel({
                         }
                       }, 150);
                     }}
-                    className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-lg cursor-pointer transition-all"
+                    disabled={isAlreadyInstalled}
+                    className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${
+                      isAlreadyInstalled
+                        ? "bg-stone-200 text-stone-400 cursor-not-allowed"
+                        : "bg-amber-600 hover:bg-amber-700 text-white cursor-pointer"
+                    }`}
                   >
                     Import Font
                   </button>
@@ -638,7 +737,7 @@ export default function AdminPanel({
               </h3>
             </div>
 
-            <div className="flex flex-col gap-3 max-h-[550px] overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-stone-200">
+            <div className="flex flex-col gap-3 max-h-[500px] lg:max-h-[60vh] xl:max-h-[65vh] overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-stone-200">
               {(() => {
                 const displayedFonts = [...fonts]
                   .filter((font) => activeFontTab === 'en' || font.supportsGreek)
@@ -674,7 +773,7 @@ export default function AdminPanel({
                   const isAppliedEL = font.id === selectedGreekFontId;
 
                   return (
-                    <button
+                    <div
                       key={font.id}
                       id={`font-btn-${font.id}`}
                       onContextMenu={(e) => {
@@ -714,6 +813,21 @@ export default function AdminPanel({
                               GR Applied
                             </span>
                           )}
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onToggleFavoriteFont?.(font.id);
+                            }}
+                            className={`p-1 rounded-lg transition-all cursor-pointer ${
+                              favoriteFontIds.includes(font.id)
+                                ? "text-amber-500 hover:bg-amber-50"
+                                : "text-stone-300 hover:text-amber-500 hover:bg-stone-100"
+                            }`}
+                            title={favoriteFontIds.includes(font.id) ? "Remove from Favorites" : "Add to Favorites"}
+                          >
+                            <Star className={`w-3.5 h-3.5 ${favoriteFontIds.includes(font.id) ? "fill-amber-400" : ""}`} />
+                          </button>
                           {onDeleteFont && (
                             <button
                               type="button"
@@ -721,7 +835,7 @@ export default function AdminPanel({
                                 e.stopPropagation();
                                 setFontIdToDeleteConfirm(font.id);
                               }}
-                              className="p-1 text-stone-400 hover:text-red-650 hover:bg-red-50 rounded-lg transition-all cursor-pointer opacity-80 group-hover:opacity-100 shrink-0"
+                              className="p-1 text-stone-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all cursor-pointer opacity-80 group-hover:opacity-100 shrink-0"
                               title={`Delete ${font.name}`}
                             >
                               <Trash2 className="w-3.5 h-3.5" />
@@ -737,7 +851,7 @@ export default function AdminPanel({
                       >
                         {activeFontTab === 'en' ? previewEn : previewEl}
                       </div>
-                    </button>
+                    </div>
                   );
                 });
               })()}
@@ -1100,29 +1214,81 @@ export default function AdminPanel({
         </div>
       )}
 
-      {/* Floating Context Menu for Font Deletion */}
+      {/* Floating Context Menu for Font Deletion & Options */}
       {contextMenu?.visible && (
         <div
           id="font-context-menu"
-          className="fixed bg-white border border-stone-250 rounded-xl shadow-lg py-1.5 z-50 text-left min-w-[140px] animate-fade-in"
+          className="fixed bg-white border border-stone-250 rounded-xl shadow-lg py-1.5 z-50 text-left min-w-[160px] animate-fade-in"
           style={{
             top: `${contextMenu.y}px`,
             left: `${contextMenu.x}px`,
           }}
           onClick={(e) => e.stopPropagation()}
         >
+          {/* Copy Font Name Option */}
           <button
             type="button"
             onClick={(e) => {
               e.stopPropagation();
-              setFontIdToDeleteConfirm(contextMenu.fontId);
+              const fontName = fonts.find(f => f.id === contextMenu.fontId)?.name || "";
+              navigator.clipboard.writeText(fontName);
+              setSuccessMessage(`Font name "${fontName}" copied to clipboard!`);
+              setTimeout(() => setSuccessMessage(null), 3000);
               setContextMenu(null);
             }}
-            className="w-full text-left px-3.5 py-2 text-xs font-semibold text-red-600 hover:bg-red-50 hover:text-red-700 flex items-center gap-2 cursor-pointer transition-colors"
+            className="w-full text-left px-3.5 py-2 text-xs font-semibold text-stone-700 hover:bg-stone-50 hover:text-stone-900 flex items-center gap-2 cursor-pointer transition-colors border-b border-stone-100 pb-2 mb-1"
           >
-            <Trash2 className="w-3.5 h-3.5 text-red-500" />
-            <span>Delete Font</span>
+            <Copy className="w-3.5 h-3.5 text-stone-500" />
+            <span>Copy Font Name</span>
           </button>
+
+          {/* Apply same font in English Option (Greek fonts tab only) */}
+          {activeFontTab === 'el' && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setTargetGreekFontId(contextMenu.fontId);
+                setShowApplyGreekToEnglishConfirm(true);
+                setContextMenu(null);
+              }}
+              className="w-full text-left px-3.5 py-2 text-xs font-bold text-amber-700 hover:bg-amber-50 hover:text-amber-800 flex items-center gap-2 cursor-pointer transition-colors border-b border-stone-100 pb-2 mb-2"
+            >
+              <Type className="w-3.5 h-3.5 text-amber-500" />
+              <span>Apply same font in English</span>
+            </button>
+          )}
+
+          {/* Favorite Toggle Option */}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleFavoriteFont?.(contextMenu.fontId);
+              setContextMenu(null);
+            }}
+            className="w-full text-left px-3.5 py-2 text-xs font-semibold text-stone-700 hover:bg-stone-50 hover:text-stone-900 flex items-center gap-2 cursor-pointer transition-colors"
+          >
+            <Star className={`w-3.5 h-3.5 ${favoriteFontIds.includes(contextMenu.fontId) ? "fill-amber-400 text-amber-500" : "text-stone-500"}`} />
+            <span>
+              {favoriteFontIds.includes(contextMenu.fontId) ? "Remove Favorite" : "Add to Favorites"}
+            </span>
+          </button>
+
+          {onDeleteFont && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setFontIdToDeleteConfirm(contextMenu.fontId);
+                setContextMenu(null);
+              }}
+              className="w-full text-left px-3.5 py-2 text-xs font-semibold text-red-600 hover:bg-red-50 hover:text-red-700 flex items-center gap-2 cursor-pointer transition-colors border-t border-stone-100 mt-1 pt-2"
+            >
+              <Trash2 className="w-3.5 h-3.5 text-red-500" />
+              <span>Delete Font</span>
+            </button>
+          )}
         </div>
       )}
 
@@ -1169,6 +1335,253 @@ export default function AdminPanel({
                 className="flex-1 py-2 px-3 bg-stone-100 hover:bg-stone-200 text-stone-700 text-xs font-bold rounded-xl border border-stone-200/60 cursor-pointer transition-all text-center"
               >
                 No, Keep
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Center Screen Font Application Confirmation Modal Overlay */}
+      {showApplyFontConfirm && (
+        <div 
+          className="fixed inset-0 bg-stone-900/40 backdrop-blur-xs flex items-center justify-center z-[200] p-4 animate-fade-in"
+          onClick={() => {}}
+        >
+          <div 
+            className="bg-white border border-stone-200 rounded-3xl p-6 max-w-md w-full shadow-xl animate-scale-up text-left space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-amber-50 flex items-center justify-center shrink-0 border border-amber-100">
+                <Type className="w-5 h-5 text-amber-600" />
+              </div>
+              <div>
+                <h4 className="text-sm font-bold text-stone-900 font-sans">Apply Imported Font?</h4>
+                <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider leading-none">Confirm Selection</p>
+              </div>
+            </div>
+            
+            <p className="text-xs text-stone-600 leading-relaxed font-sans">
+              Would you like to apply <strong className="text-stone-900 font-semibold">"{importedFontName}"</strong> as your active font?
+            </p>
+
+            {/* Visual Preview Container */}
+            <div className="p-4 rounded-2xl bg-stone-50 border border-stone-200/60 space-y-3 shadow-3xs">
+              <div className="flex items-center justify-between">
+                <span className="text-[9px] font-bold uppercase tracking-wider text-amber-600 block leading-none">
+                  Typography Preview
+                </span>
+                <div className="flex items-center gap-1.5 select-none shrink-0 bg-stone-100 p-0.5 rounded-lg border border-stone-200/40">
+                  <button
+                    type="button"
+                    onClick={() => setModalPreviewFontSize(prev => Math.max(12, prev - 2))}
+                    className="w-5 h-5 flex items-center justify-center text-[10px] font-extrabold bg-white hover:bg-stone-50 text-stone-700 rounded shadow-3xs hover:text-amber-700 cursor-pointer active:scale-95 transition-all"
+                    title="Decrease preview font size"
+                  >
+                    A-
+                  </button>
+                  <span className="text-[9px] font-bold text-stone-500 w-7 text-center font-mono">
+                    {modalPreviewFontSize}px
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setModalPreviewFontSize(prev => Math.min(32, prev + 2))}
+                    className="w-5 h-5 flex items-center justify-center text-[10px] font-extrabold bg-white hover:bg-stone-50 text-stone-700 rounded shadow-3xs hover:text-amber-700 cursor-pointer active:scale-95 transition-all"
+                    title="Increase preview font size"
+                  >
+                    A+
+                  </button>
+                </div>
+              </div>
+              
+              <div 
+                style={{ fontFamily: `"${importedFontName}", Georgia, serif` }}
+                className="space-y-3 text-stone-850"
+              >
+                <div className="space-y-1">
+                  <p className="text-[9px] font-bold uppercase tracking-wider text-stone-400 leading-none">
+                    English (Latin)
+                  </p>
+                  <p 
+                    style={{ fontSize: `${modalPreviewFontSize}px` }}
+                    className="font-medium leading-relaxed"
+                  >
+                    "True wisdom comes to each of us when we realize how little we understand."
+                  </p>
+                </div>
+
+                <div className="border-t border-stone-200/80 my-2"></div>
+
+                <div className="space-y-1">
+                  <p className="text-[9px] font-bold uppercase tracking-wider text-stone-400 leading-none">
+                    Greek (Ελληνικά)
+                  </p>
+                  <p 
+                    style={{ fontSize: `${modalPreviewFontSize}px` }}
+                    className="font-medium leading-relaxed"
+                  >
+                    "Η αληθινή σοφία έρχεται στον καθένα μας όταν συνειδητοποιήσουμε πόσο λίγο κατανοούμε."
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowApplyFontConfirm(false);
+                  setSuccessMessage(`Font "${importedFontName}" successfully applied!`);
+                  setTimeout(() => setSuccessMessage(null), 3000);
+                }}
+                className="flex-1 py-2 px-3 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-xl shadow-xs cursor-pointer transition-all text-center"
+              >
+                Yes, Apply
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  // Restore previously selected fonts
+                  if (onSelectFontId && previousFontId) {
+                    onSelectFontId(previousFontId);
+                  }
+                  if (onSelectGreekFontId && previousGreekFontId) {
+                    onSelectGreekFontId(previousGreekFontId);
+                  }
+                  setShowApplyFontConfirm(false);
+                  
+                  // Scroll back to the previous font button
+                  const targetScrollId = activeFontTab === 'en' ? previousFontId : previousGreekFontId;
+                  setTimeout(() => {
+                    const btn = document.getElementById(`font-btn-${targetScrollId}`);
+                    if (btn) {
+                      btn.scrollIntoView({ block: "center", behavior: "smooth" });
+                    }
+                  }, 150);
+                }}
+                className="flex-1 py-2 px-3 bg-stone-100 hover:bg-stone-200 text-stone-700 text-xs font-bold rounded-xl border border-stone-200/60 cursor-pointer transition-all text-center"
+              >
+                No, Keep Previous
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Greek Font to English (Latin) Application Confirmation Modal Overlay */}
+      {showApplyGreekToEnglishConfirm && targetGreekFontId && (
+        <div 
+          className="fixed inset-0 bg-stone-900/40 backdrop-blur-xs flex items-center justify-center z-[200] p-4 animate-fade-in"
+          onClick={() => {
+            setShowApplyGreekToEnglishConfirm(false);
+            setTargetGreekFontId(null);
+          }}
+        >
+          <div 
+            className="bg-white border border-stone-200 rounded-3xl p-6 max-w-md w-full shadow-xl animate-scale-up text-left space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-amber-50 flex items-center justify-center shrink-0 border border-amber-100">
+                <Type className="w-5 h-5 text-amber-600" />
+              </div>
+              <div>
+                <h4 className="text-sm font-bold text-stone-900 font-sans">Apply Font to English?</h4>
+                <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider leading-none">Confirm Unified Styling</p>
+              </div>
+            </div>
+            
+            <p className="text-xs text-stone-600 leading-relaxed font-sans">
+              Would you like to apply <strong className="text-stone-900 font-semibold">"{fonts.find(f => f.id === targetGreekFontId)?.name || ""}"</strong> as your active font for <strong className="text-amber-700 font-semibold">English quotes</strong> as well?
+            </p>
+
+            {/* Visual Preview Container */}
+            <div className="p-4 rounded-2xl bg-stone-50 border border-stone-200/60 space-y-3 shadow-3xs">
+              <div className="flex items-center justify-between">
+                <span className="text-[9px] font-bold uppercase tracking-wider text-amber-600 block leading-none">
+                  Typography Preview
+                </span>
+                <div className="flex items-center gap-1.5 select-none shrink-0 bg-stone-100 p-0.5 rounded-lg border border-stone-200/40">
+                  <button
+                    type="button"
+                    onClick={() => setModalPreviewFontSize(prev => Math.max(12, prev - 2))}
+                    className="w-5 h-5 flex items-center justify-center text-[10px] font-extrabold bg-white hover:bg-stone-50 text-stone-700 rounded shadow-3xs hover:text-amber-700 cursor-pointer active:scale-95 transition-all"
+                    title="Decrease preview font size"
+                  >
+                    A-
+                  </button>
+                  <span className="text-[9px] font-bold text-stone-500 w-7 text-center font-mono">
+                    {modalPreviewFontSize}px
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setModalPreviewFontSize(prev => Math.min(32, prev + 2))}
+                    className="w-5 h-5 flex items-center justify-center text-[10px] font-extrabold bg-white hover:bg-stone-50 text-stone-700 rounded shadow-3xs hover:text-amber-700 cursor-pointer active:scale-95 transition-all"
+                    title="Increase preview font size"
+                  >
+                    A+
+                  </button>
+                </div>
+              </div>
+              
+              <div 
+                style={{ fontFamily: fonts.find(f => f.id === targetGreekFontId)?.cssValue || "inherit" }}
+                className="space-y-3 text-stone-850"
+              >
+                <div className="space-y-1">
+                  <p className="text-[9px] font-bold uppercase tracking-wider text-stone-400 leading-none">
+                    English (Latin)
+                  </p>
+                  <p 
+                    style={{ fontSize: `${modalPreviewFontSize}px` }}
+                    className="font-medium leading-relaxed"
+                  >
+                    "True wisdom comes to each of us when we realize how little we understand."
+                  </p>
+                </div>
+
+                <div className="border-t border-stone-200/80 my-2"></div>
+
+                <div className="space-y-1">
+                  <p className="text-[9px] font-bold uppercase tracking-wider text-stone-400 leading-none">
+                    Greek (Ελληνικά)
+                  </p>
+                  <p 
+                    style={{ fontSize: `${modalPreviewFontSize}px` }}
+                    className="font-medium leading-relaxed"
+                  >
+                    "Η αληθινή σοφία έρχεται στον καθένα μας όταν συνειδητοποιήσουμε πόσο λίγο κατανοούμε."
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  if (onSelectFontId && targetGreekFontId) {
+                    onSelectFontId(targetGreekFontId);
+                  }
+                  setShowApplyGreekToEnglishConfirm(false);
+                  const fontName = fonts.find(f => f.id === targetGreekFontId)?.name || "";
+                  setSuccessMessage(`Font "${fontName}" applied to English quotes successfully!`);
+                  setTimeout(() => setSuccessMessage(null), 3000);
+                  setTargetGreekFontId(null);
+                }}
+                className="flex-1 py-2 px-3 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-xl shadow-xs cursor-pointer transition-all text-center font-bold"
+              >
+                Yes, Apply to English
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowApplyGreekToEnglishConfirm(false);
+                  setTargetGreekFontId(null);
+                }}
+                className="flex-1 py-2 px-3 bg-stone-100 hover:bg-stone-200 text-stone-700 text-xs font-bold rounded-xl border border-stone-200/60 cursor-pointer transition-all text-center"
+              >
+                No, Keep Separate
               </button>
             </div>
           </div>

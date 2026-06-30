@@ -90,6 +90,7 @@ export default function App() {
   const [activeSearchPlayList, setActiveSearchPlayList] = useState<Quote[] | null>(null);
   const [activeSearchQuery, setActiveSearchQuery] = useState("");
   const [initialQuoteId, setInitialQuoteId] = useState<string | null>(null);
+  const [targetEditQuoteId, setTargetEditQuoteId] = useState<string | null>(null);
 
   const [selectedFontId, setSelectedFontId] = useState<string>(() => {
     return localStorage.getItem("quote_shuffle_font_id") || "playfair-display";
@@ -119,6 +120,30 @@ export default function App() {
     return QUOTE_FONTS;
   });
 
+  const [favoriteFontIds, setFavoriteFontIds] = useState<string[]>(() => {
+    try {
+      const stored = localStorage.getItem("quote_shuffle_favorite_font_ids");
+      if (stored) {
+        return JSON.parse(stored);
+      }
+    } catch (e) {
+      console.error("Could not load favorite fonts", e);
+    }
+    return [];
+  });
+
+  const handleToggleFavoriteFont = (id: string) => {
+    setFavoriteFontIds((prev) => {
+      const updated = prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id];
+      try {
+        localStorage.setItem("quote_shuffle_favorite_font_ids", JSON.stringify(updated));
+      } catch (e) {
+        console.warn("Could not save favorite fonts to localStorage", e);
+      }
+      return updated;
+    });
+  };
+
   const handleAddFont = (newFont: QuoteFont) => {
     setFonts((prev) => {
       const updated = [...prev, newFont];
@@ -138,6 +163,16 @@ export default function App() {
         localStorage.setItem("quote_shuffle_custom_fonts", JSON.stringify(updated));
       } catch (e) {
         console.warn("Could not save fonts to localStorage:", e);
+      }
+      return updated;
+    });
+
+    setFavoriteFontIds((prev) => {
+      const updated = prev.filter((fId) => fId !== id);
+      try {
+        localStorage.setItem("quote_shuffle_favorite_font_ids", JSON.stringify(updated));
+      } catch (e) {
+        console.warn("Could not save favorite fonts to localStorage", e);
       }
       return updated;
     });
@@ -630,6 +665,16 @@ export default function App() {
     setIsSearchOpen(false);
   };
 
+  const handleNavigateToQuote = (quoteId: string, categoryId: string) => {
+    const cat = categories.find((c) => c.id === categoryId);
+    if (cat) {
+      setActiveCategoryId(categoryId);
+    }
+    setTargetEditQuoteId(quoteId);
+    setActiveTab("manage");
+    setIsSearchOpen(false);
+  };
+
   // Derived properties
   const activeCategory = categories.find((c) => c.id === activeCategoryId);
   const filteredQuotes = quotes.filter((q) => q.categoryId === activeCategoryId);
@@ -867,7 +912,12 @@ export default function App() {
               }}
               selectedFontId={selectedFontId}
               selectedGreekFontId={selectedGreekFontId}
+              onSelectFontId={setSelectedFontId}
+              onSelectGreekFontId={setSelectedGreekFontId}
               fonts={fonts}
+              onDeleteFont={handleDeleteFont}
+              favoriteFontIds={favoriteFontIds}
+              onToggleFavoriteFont={handleToggleFavoriteFont}
               zenTextWidth={zenTextWidth}
             />
           ) : activeTab === "admin" ? (
@@ -887,6 +937,8 @@ export default function App() {
               previewEn={previewEn}
               previewEl={previewEl}
               fonts={fonts}
+              favoriteFontIds={favoriteFontIds}
+              onToggleFavoriteFont={handleToggleFavoriteFont}
               onAddFont={handleAddFont}
               onDeleteFont={handleDeleteFont}
               onResetFonts={handleResetFonts}
@@ -910,6 +962,8 @@ export default function App() {
                 setInitialQuoteId(id);
                 setActiveTab("player");
               }}
+              targetEditQuoteId={targetEditQuoteId}
+              onClearTargetEditQuoteId={() => setTargetEditQuoteId(null)}
             />
           ) : (
             <div className="h-full flex items-center justify-center text-stone-400 p-8 text-center font-serif">
@@ -940,6 +994,7 @@ export default function App() {
         quotes={quotes}
         categories={categories}
         onPlaySearchResults={handlePlaySearchResults}
+        onNavigateToQuote={handleNavigateToQuote}
       />
 
       {/* Bulk Move/Copy Quotes Confirmation Dialog */}

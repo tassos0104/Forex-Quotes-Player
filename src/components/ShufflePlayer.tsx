@@ -32,6 +32,7 @@ import {
   Underline,
   Highlighter,
   AlertTriangle,
+  Star,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { renderFormattedText, stripFormatTags, isGreekText } from "../utils/textFormatter";
@@ -172,6 +173,11 @@ interface ShufflePlayerProps {
   onExitZenMode?: () => void;
   selectedFontId?: string;
   selectedGreekFontId?: string;
+  onSelectFontId?: (id: string) => void;
+  onSelectGreekFontId?: (id: string) => void;
+  onDeleteFont?: (id: string) => void;
+  favoriteFontIds?: string[];
+  onToggleFavoriteFont?: (id: string) => void;
   fonts?: QuoteFont[];
   zenTextWidth?: number;
 }
@@ -193,6 +199,11 @@ export default function ShufflePlayer({
   onExitZenMode,
   selectedFontId,
   selectedGreekFontId,
+  onSelectFontId,
+  onSelectGreekFontId,
+  onDeleteFont,
+  favoriteFontIds = [],
+  onToggleFavoriteFont,
   fonts = QUOTE_FONTS,
   zenTextWidth = 85,
 }: ShufflePlayerProps) {
@@ -309,6 +320,15 @@ export default function ShufflePlayer({
   const [zenTheme, setZenTheme] = useState<"dark" | "warm">("dark");
   const [showShortcuts, setShowShortcuts] = useState<boolean>(false);
   const [showColorPicker, setShowColorPicker] = useState<boolean>(false);
+  const [showFontPicker, setShowFontPicker] = useState<boolean>(false);
+  const [randomizeFontMode, setRandomizeFontMode] = useState<'none' | 'all' | 'favorites'>(() => {
+    try {
+      return (localStorage.getItem("quote_shuffle_randomize_font_mode") as any) || "none";
+    } catch (e) {
+      return "none";
+    }
+  });
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState<boolean>(false);
   const [zenBgColor, setZenBgColor] = useState<string>(() => {
     try {
       return localStorage.getItem("quote_shuffle_zen_bg_color") || "#ffffff";
@@ -709,7 +729,7 @@ export default function ShufflePlayer({
     const resetTimeout = () => {
       clearTimeout(timeoutId);
       timeoutId = setTimeout(() => {
-        if (!showColorPicker && !showShortcuts) {
+        if (!showColorPicker && !showShortcuts && !showFontPicker) {
           setIsControlsVisible(false);
           // When hiding, reset all baselines and coordinates so the next movement is fresh
           baselineX = -1;
@@ -856,7 +876,7 @@ export default function ShufflePlayer({
       window.removeEventListener("touchmove", handleTouchMove as EventListener);
       clearTimeout(timeoutId);
     };
-  }, [isZenMode, showColorPicker, showShortcuts]);
+  }, [isZenMode, showColorPicker, showShortcuts, showFontPicker]);
 
   const handleContextMenu = (e: React.MouseEvent<HTMLTextAreaElement>) => {
     e.stopPropagation();
@@ -1016,6 +1036,303 @@ export default function ShufflePlayer({
     const isGreek = isGreekText(activeQuote.text);
     return isGreek ? activeGreekFont.cssValue : activeFont.cssValue;
   }, [activeQuote, activeFont, activeGreekFont]);
+
+  const handleSetRandomizeFontMode = (mode: 'none' | 'all' | 'favorites') => {
+    setRandomizeFontMode(mode);
+    try {
+      localStorage.setItem("quote_shuffle_randomize_font_mode", mode);
+    } catch (e) {
+      console.warn("Could not save randomize font mode", e);
+    }
+  };
+
+  const handleNextFont = useCallback(() => {
+    if (!activeQuote) return;
+    const isGreek = isGreekText(activeQuote.text);
+    const currentFontId = isGreek ? selectedGreekFontId : selectedFontId;
+
+    // Filter fonts of the same language
+    const pool = fonts.filter((f) => isGreek ? f.supportsGreek : true);
+    if (pool.length === 0) return;
+
+    const currentIndex = pool.findIndex((f) => f.id === currentFontId);
+    const nextIndex = currentIndex === -1 ? 0 : (currentIndex + 1) % pool.length;
+    const nextFont = pool[nextIndex];
+
+    if (isGreek) {
+      onSelectGreekFontId?.(nextFont.id);
+    } else {
+      onSelectFontId?.(nextFont.id);
+    }
+  }, [activeQuote, fonts, selectedFontId, selectedGreekFontId, onSelectFontId, onSelectGreekFontId]);
+
+  const handlePrevFont = useCallback(() => {
+    if (!activeQuote) return;
+    const isGreek = isGreekText(activeQuote.text);
+    const currentFontId = isGreek ? selectedGreekFontId : selectedFontId;
+
+    // Filter fonts of the same language
+    const pool = fonts.filter((f) => isGreek ? f.supportsGreek : true);
+    if (pool.length === 0) return;
+
+    const currentIndex = pool.findIndex((f) => f.id === currentFontId);
+    const prevIndex = currentIndex === -1 ? pool.length - 1 : (currentIndex - 1 + pool.length) % pool.length;
+    const prevFont = pool[prevIndex];
+
+    if (isGreek) {
+      onSelectGreekFontId?.(prevFont.id);
+    } else {
+      onSelectFontId?.(prevFont.id);
+    }
+  }, [activeQuote, fonts, selectedFontId, selectedGreekFontId, onSelectFontId, onSelectGreekFontId]);
+
+  // Reset delete confirm state when active font changes
+  useEffect(() => {
+    setShowDeleteConfirm(false);
+  }, [selectedFontId, selectedGreekFontId]);
+
+  // Quote-change auto font-randomization effect
+  useEffect(() => {
+    if (!activeQuote || randomizeFontMode === "none") return;
+
+    const isGreek = isGreekText(activeQuote.text);
+    // filter fonts based on language
+    let pool = fonts.filter((f) => isGreek ? f.supportsGreek : true);
+
+    if (randomizeFontMode === "favorites") {
+      pool = pool.filter((f) => favoriteFontIds.includes(f.id));
+      // Fallback if no favorites exist for this language:
+      if (pool.length === 0) {
+        pool = fonts.filter((f) => isGreek ? f.supportsGreek : true);
+      }
+    }
+
+    if (pool.length > 0) {
+      const randomIndex = Math.floor(Math.random() * pool.length);
+      const randomFont = pool[randomIndex];
+      if (isGreek) {
+        if (onSelectGreekFontId && selectedGreekFontId !== randomFont.id) {
+          onSelectGreekFontId(randomFont.id);
+        }
+      } else {
+        if (onSelectFontId && selectedFontId !== randomFont.id) {
+          onSelectFontId(randomFont.id);
+        }
+      }
+    }
+  }, [
+    activeQuote?.id,
+    randomizeFontMode,
+    favoriteFontIds,
+    fonts,
+    onSelectFontId,
+    onSelectGreekFontId,
+  ]);
+
+  const renderFontPickerContent = (isDarkBg: boolean) => {
+    if (!activeQuote) return null;
+
+    const isGreek = isGreekText(activeQuote.text);
+    const activeLanguageLabel = isGreek ? "Greek" : "Latin/EN";
+    const currentFont = isGreek ? activeGreekFont : activeFont;
+    const isCurrentFav = favoriteFontIds.includes(currentFont.id);
+
+    // Language fonts pool
+    const langFonts = fonts.filter((f) => isGreek ? f.supportsGreek : true);
+    const favLangFonts = langFonts.filter((f) => favoriteFontIds.includes(f.id));
+
+    return (
+      <div className="flex flex-col gap-3.5 text-left">
+        <div className="flex items-center justify-between border-b pb-2" style={{ borderColor: isDarkBg ? "#292524" : "#f1f0ee" }}>
+          <div className="flex items-center gap-1.5">
+            <Type className="w-4 h-4 text-amber-500" />
+            <span className="font-bold text-xs uppercase tracking-wider">
+              Font Settings
+            </span>
+          </div>
+          <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full border ${
+            isDarkBg
+              ? "bg-amber-950/40 text-amber-400 border-amber-850/40"
+              : "bg-amber-50 text-stone-700 border-amber-200/50"
+          }`}>
+            {activeLanguageLabel}
+          </span>
+        </div>
+
+        {/* 1. Cycle Fonts Manual Controls */}
+        <div className="flex flex-col gap-1.5">
+          <span className="text-[10px] font-bold uppercase tracking-wider text-stone-400">
+            Preview & Cycle Fonts
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handlePrevFont}
+              className={`p-1.5 rounded-lg border transition-all cursor-pointer ${
+                isDarkBg
+                  ? "border-stone-800 hover:bg-stone-850 text-stone-300"
+                  : "border-stone-200 hover:bg-stone-100 text-stone-700"
+              }`}
+              title="Previous Font"
+            >
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+
+            <div
+              className={`flex-1 text-center py-1.5 px-2 rounded-lg border text-xs font-semibold truncate ${
+                isDarkBg
+                  ? "bg-stone-950/40 border-stone-800 text-stone-200"
+                  : "bg-stone-50 border-stone-200 text-stone-800"
+              }`}
+            >
+              {currentFont.name}
+            </div>
+
+            <button
+              type="button"
+              onClick={handleNextFont}
+              className={`p-1.5 rounded-lg border transition-all cursor-pointer ${
+                isDarkBg
+                  ? "border-stone-800 hover:bg-stone-850 text-stone-300"
+                  : "border-stone-200 hover:bg-stone-100 text-stone-700"
+              }`}
+              title="Next Font"
+            >
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+
+        {/* 2. Favorite & Delete controls for the current font */}
+        <div className="flex items-center justify-between gap-2">
+          {/* Favorite Toggle button */}
+          <button
+            type="button"
+            onClick={() => onToggleFavoriteFont?.(currentFont.id)}
+            className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-xl text-[11px] font-bold border transition-all cursor-pointer ${
+              isCurrentFav
+                ? "bg-amber-500/10 border-amber-500/30 text-amber-500 font-extrabold"
+                : isDarkBg
+                  ? "border-stone-800 text-stone-400 hover:text-stone-200 hover:bg-stone-850"
+                  : "border-stone-200 text-stone-500 hover:text-stone-800 hover:bg-stone-50"
+            }`}
+          >
+            <Star className={`w-3.5 h-3.5 ${isCurrentFav ? "fill-amber-550 text-amber-500" : ""}`} />
+            <span>{isCurrentFav ? "Favorited" : "Favorite"}</span>
+          </button>
+
+          {/* Delete Option */}
+          {onDeleteFont && (
+            <div className="relative flex-1">
+              {!showDeleteConfirm ? (
+                <button
+                  type="button"
+                  onClick={() => setShowDeleteConfirm(true)}
+                  className={`w-full flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-xl text-[11px] font-bold border transition-all cursor-pointer ${
+                    isDarkBg
+                      ? "border-stone-800 text-stone-400 hover:text-red-400 hover:bg-stone-850"
+                      : "border-stone-200 text-stone-500 hover:text-red-600 hover:bg-stone-50"
+                  }`}
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Delete Font</span>
+                </button>
+              ) : (
+                <div className="flex items-center border border-red-500/30 rounded-xl overflow-hidden text-[10px] font-bold h-[30px] w-full">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onDeleteFont(currentFont.id);
+                      setShowDeleteConfirm(false);
+                    }}
+                    className="flex-1 bg-red-600 text-white h-full hover:bg-red-700 cursor-pointer text-center"
+                  >
+                    Delete?
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowDeleteConfirm(false)}
+                    className={`w-10 h-full cursor-pointer text-center ${
+                      isDarkBg ? "bg-stone-800 text-stone-300 hover:bg-stone-750" : "bg-stone-100 text-stone-600 hover:bg-stone-200"
+                    }`}
+                  >
+                    No
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* 3. Randomize Font Option */}
+        <div className="flex flex-col gap-1.5 pt-2 border-t" style={{ borderColor: isDarkBg ? "#292524" : "#f1f0ee" }}>
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-stone-400">
+              Randomize on Next Quote
+            </span>
+          </div>
+          <div className="flex bg-stone-100 dark:bg-stone-950 p-0.5 rounded-xl border border-stone-200 dark:border-stone-900 text-[10px] font-bold">
+            <button
+              type="button"
+              onClick={() => handleSetRandomizeFontMode("none")}
+              className={`flex-1 py-1 rounded-lg text-center transition-all cursor-pointer ${
+                randomizeFontMode === "none"
+                  ? "bg-amber-500 text-white shadow-xs font-black"
+                  : isDarkBg
+                    ? "text-stone-400 hover:text-stone-200"
+                    : "text-stone-500 hover:text-stone-800"
+              }`}
+            >
+              Off
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSetRandomizeFontMode("favorites")}
+              className={`flex-1 py-1 rounded-lg text-center transition-all cursor-pointer ${
+                randomizeFontMode === "favorites"
+                  ? "bg-amber-500 text-white shadow-xs font-black"
+                  : isDarkBg
+                    ? "text-stone-400 hover:text-stone-200"
+                    : "text-stone-500 hover:text-stone-800"
+              }`}
+            >
+              Favorites
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSetRandomizeFontMode("all")}
+              className={`flex-1 py-1 rounded-lg text-center transition-all cursor-pointer ${
+                randomizeFontMode === "all"
+                  ? "bg-amber-500 text-white shadow-xs font-black"
+                  : isDarkBg
+                    ? "text-stone-400 hover:text-stone-200"
+                    : "text-stone-500 hover:text-stone-800"
+              }`}
+            >
+              All Fonts
+            </button>
+          </div>
+
+          {/* Fallback warning / stats */}
+          {randomizeFontMode === "favorites" && favLangFonts.length === 0 && (
+            <p className="text-[9px] text-amber-600 dark:text-amber-400 leading-normal italic font-medium">
+              No favorited {activeLanguageLabel} fonts yet. Falling back to all fonts.
+            </p>
+          )}
+          {randomizeFontMode === "favorites" && favLangFonts.length > 0 && (
+            <p className="text-[9px] text-stone-400 dark:text-stone-500 leading-none">
+              Randomizing from {favLangFonts.length} favorite {activeLanguageLabel} font(s).
+            </p>
+          )}
+          {randomizeFontMode === "all" && (
+            <p className="text-[9px] text-stone-400 dark:text-stone-500 leading-none">
+              Randomizing from {langFonts.length} {activeLanguageLabel} font(s).
+            </p>
+          )}
+        </div>
+      </div>
+    );
+  };
 
   const pipCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const pipVideoRef = useRef<HTMLVideoElement | null>(null);
@@ -2007,7 +2324,7 @@ export default function ShufflePlayer({
               </div>
 
               {/* Tag / Category Indicator */}
-              <div className="relative z-10 flex items-center justify-between mb-4">
+              <div className="relative z-30 flex items-center justify-between mb-4">
                 <div className="flex items-center gap-2 flex-wrap">
                   <span
                     id="quote-tag-category"
@@ -2078,6 +2395,39 @@ export default function ShufflePlayer({
                   >
                     <Volume2 className={`w-4 h-4 ${isSpeaking ? "animate-bounce" : ""}`} />
                   </button>
+
+                  {/* Font Styling Settings Button */}
+                  <div className="relative">
+                    <button
+                      id="normal-font-picker-toggle"
+                      onClick={() => {
+                        setShowFontPicker(!showFontPicker);
+                        setShowColorPicker(false);
+                      }}
+                      className={`p-2 rounded-xl transition-all cursor-pointer ${
+                        showFontPicker
+                          ? "text-amber-800 bg-amber-50"
+                          : "text-stone-400 hover:text-stone-700 hover:bg-stone-100"
+                      }`}
+                      title="Font Styling Settings"
+                    >
+                      <Type className="w-4 h-4" />
+                    </button>
+
+                    <AnimatePresence>
+                      {showFontPicker && (
+                        <motion.div
+                          id="normal-font-picker-dropdown"
+                          initial={{ opacity: 0, y: 10 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, y: 10 }}
+                          className="absolute right-0 mt-2 p-4 rounded-2xl border border-stone-200 bg-white shadow-2xl w-72 z-50 flex flex-col gap-3.5 text-stone-800"
+                        >
+                          {renderFontPickerContent(false)}
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </div>
 
                   {/* Edit active quote from slide */}
                   <button
@@ -2371,6 +2721,7 @@ export default function ShufflePlayer({
                     onClick={() => {
                       setShowColorPicker(!showColorPicker);
                       setShowShortcuts(false);
+                      setShowFontPicker(false);
                     }}
                     className={`p-2.5 rounded-xl transition-all border flex items-center gap-1.5 cursor-pointer ${
                       isDarkText
@@ -3087,6 +3438,44 @@ export default function ShufflePlayer({
                   </AnimatePresence>
                 </div>
 
+                {/* Font Customizer Button */}
+                <div className="relative">
+                  <button
+                    id="zen-font-picker-toggle"
+                    onClick={() => {
+                      setShowFontPicker(!showFontPicker);
+                      setShowColorPicker(false);
+                      setShowShortcuts(false);
+                    }}
+                    className={`p-2.5 rounded-xl transition-all border flex items-center gap-1.5 cursor-pointer ${
+                      isDarkText
+                        ? "border-stone-300 hover:bg-stone-200 text-stone-700"
+                        : "border-stone-800 hover:bg-stone-900 text-stone-300"
+                    } ${showFontPicker ? "bg-amber-100/10" : ""}`}
+                    title="Customize Font Settings"
+                  >
+                    <Type className="w-4 h-4" />
+                  </button>
+
+                  <AnimatePresence>
+                    {showFontPicker && (
+                      <motion.div
+                        id="zen-font-picker-dropdown"
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: 10 }}
+                        className={`absolute right-0 mt-2 p-4 rounded-2xl border shadow-2xl w-72 z-50 flex flex-col gap-3.5 ${
+                          isDarkText
+                            ? "bg-white border-stone-200 text-stone-800"
+                            : "bg-stone-900 border-stone-800 text-stone-100"
+                        }`}
+                      >
+                        {renderFontPickerContent(!isDarkText)}
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+
                 {/* Theme Selector Button */}
                 <button
                   id="zen-theme-toggle"
@@ -3113,6 +3502,7 @@ export default function ShufflePlayer({
                     onClick={() => {
                       setShowShortcuts(!showShortcuts);
                       setShowColorPicker(false);
+                      setShowFontPicker(false);
                     }}
                     className={`p-2.5 rounded-xl transition-all border cursor-pointer ${
                       isDarkText
@@ -3203,6 +3593,26 @@ export default function ShufflePlayer({
                     <ThumbsDown className={`w-4 h-4 ${activeQuote.rating === 'down' ? "fill-current" : ""}`} />
                   </button>
                 </div>
+
+                {/* Copy Quote Button inside Zen */}
+                <button
+                  id="zen-copy-btn"
+                  onClick={handleCopy}
+                  className={`p-2.5 rounded-xl transition-all border cursor-pointer ${
+                    copied
+                      ? "border-emerald-500 bg-emerald-500/10 text-emerald-400"
+                      : isDarkText
+                      ? "border-stone-300 hover:bg-stone-200 text-stone-700"
+                      : "border-stone-800 hover:bg-stone-900 text-stone-300"
+                  }`}
+                  title="Copy to Clipboard"
+                >
+                  {copied ? (
+                    <Check className="w-4 h-4 text-emerald-500" />
+                  ) : (
+                    <Copy className="w-4 h-4" />
+                  )}
+                </button>
 
                 {/* Speech Button inside Zen */}
                 <button

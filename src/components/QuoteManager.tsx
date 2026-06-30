@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Quote, Category } from "../types";
-import { Plus, Trash2, Calendar, Sparkles, ThumbsUp, ThumbsDown, Pencil, Check, X, Type, Underline, Highlighter, Eraser, Bold, Italic, Play, Eye, EyeOff, GripVertical } from "lucide-react";
+import { Plus, Trash2, Calendar, Sparkles, ThumbsUp, ThumbsDown, Pencil, Check, X, Type, Underline, Highlighter, Eraser, Bold, Italic, Play, Eye, EyeOff, GripVertical, Search } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { renderFormattedText, stripFormatTags, isGreekText } from "../utils/textFormatter";
 
@@ -17,6 +17,8 @@ interface QuoteManagerProps {
   onReorderQuotes?: (reorderedQuotes: Quote[]) => void;
   onPlayQuote?: (id: string) => void;
   onUpdateAllQuotes?: (allQuotes: Quote[]) => void;
+  targetEditQuoteId?: string | null;
+  onClearTargetEditQuoteId?: () => void;
 }
 
 export default function QuoteManager({
@@ -32,6 +34,8 @@ export default function QuoteManager({
   onReorderQuotes,
   onPlayQuote,
   onUpdateAllQuotes,
+  targetEditQuoteId,
+  onClearTargetEditQuoteId,
 }: QuoteManagerProps) {
   const [text, setText] = useState("");
   const [author, setAuthor] = useState("");
@@ -43,6 +47,7 @@ export default function QuoteManager({
   const [editAuthor, setEditAuthor] = useState("");
   const [editCategoryId, setEditCategoryId] = useState("");
   const [editError, setEditError] = useState("");
+  const [catalogSearchText, setCatalogSearchText] = useState("");
 
   // Category renaming states
   const [isEditingCategoryName, setIsEditingCategoryName] = useState(false);
@@ -163,6 +168,32 @@ export default function QuoteManager({
       setShowBulkDeleteConfirm(false);
     }
   }, [selectedQuoteIds.length]);
+
+  // Handle external edit navigation request (scroll & edit)
+  useEffect(() => {
+    if (targetEditQuoteId && quotes.some((q) => q.id === targetEditQuoteId)) {
+      setEditingQuoteId(targetEditQuoteId);
+      const targetQuote = quotes.find((q) => q.id === targetEditQuoteId);
+      if (targetQuote) {
+        setEditText(targetQuote.text);
+        setEditAuthor(targetQuote.author || "");
+        setEditCategoryId(targetQuote.categoryId);
+      }
+      
+      onClearTargetEditQuoteId?.();
+
+      setTimeout(() => {
+        const el = document.getElementById(`quote-row-${targetEditQuoteId}`);
+        if (el) {
+          el.scrollIntoView({ behavior: "smooth", block: "center" });
+          el.classList.add("ring-2", "ring-amber-500", "ring-offset-2");
+          setTimeout(() => {
+            el.classList.remove("ring-2", "ring-amber-500", "ring-offset-2");
+          }, 2000);
+        }
+      }, 300);
+    }
+  }, [targetEditQuoteId, quotes, onClearTargetEditQuoteId]);
 
   // Cancel editing mode if quotes are selected
   useEffect(() => {
@@ -980,12 +1011,20 @@ export default function QuoteManager({
   // Sort quotes newest first
   const sortedQuotes = [...quotes].sort((a, b) => b.createdAt - a.createdAt);
 
-  // Filter quotes based on active filter
+  // Filter quotes based on active filter and catalogSearchText
   const filteredQuotes = sortedQuotes.filter((q) => {
-    if (quoteFilter === "hidden") return q.isActive === false;
-    if (quoteFilter === "thumbs-up") return q.rating === "up";
-    if (quoteFilter === "thumbs-down") return q.rating === "down";
-    if (quoteFilter === "formatted") return stripFormatTags(q.text) !== q.text;
+    if (quoteFilter === "hidden" && q.isActive !== false) return false;
+    if (quoteFilter === "thumbs-up" && q.rating !== "up") return false;
+    if (quoteFilter === "thumbs-down" && q.rating !== "down") return false;
+    if (quoteFilter === "formatted" && stripFormatTags(q.text) === q.text) return false;
+
+    if (catalogSearchText.trim()) {
+      const query = catalogSearchText.toLowerCase();
+      const textMatches = stripFormatTags(q.text).toLowerCase().includes(query);
+      const authorMatches = (q.author || "").toLowerCase().includes(query);
+      return textMatches || authorMatches;
+    }
+
     return true;
   });
 
@@ -1308,6 +1347,33 @@ export default function QuoteManager({
                   <Plus className="w-3.5 h-3.5" />
                   <span>Bulk Paste Quotes</span>
                 </button>
+              </div>
+            </div>
+
+            {/* Search Quotes catalog filter bar with visible label */}
+            <div className="flex flex-col sm:flex-row sm:items-center gap-2.5 w-full">
+              <label htmlFor="catalog-search" className="text-[11px] font-extrabold uppercase tracking-wider text-stone-500 font-sans whitespace-nowrap flex items-center gap-1.5 shrink-0 select-none">
+                <Search className="w-3.5 h-3.5 text-amber-600" />
+                SEARCH QUOTES:
+              </label>
+              <div className="relative flex-1">
+                <input
+                  id="catalog-search"
+                  type="text"
+                  value={catalogSearchText}
+                  onChange={(e) => setCatalogSearchText(e.target.value)}
+                  placeholder="Search quotes in this category by text or author..."
+                  className="w-full pl-3 pr-8 py-2 bg-stone-50 border border-stone-200 hover:border-stone-300 rounded-xl text-xs text-stone-850 placeholder-stone-400 focus:outline-none focus:border-amber-600 focus:bg-white focus:ring-1 focus:ring-amber-600 transition-all font-sans font-medium"
+                />
+                {catalogSearchText && (
+                  <button
+                    type="button"
+                    onClick={() => setCatalogSearchText("")}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-stone-400 hover:text-stone-600 text-xs font-bold font-sans cursor-pointer p-0.5 rounded-full hover:bg-stone-100"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
               </div>
             </div>
 

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Quote, Category } from "../types";
-import { Search, X, Play, Tag, HelpCircle, ArrowRight } from "lucide-react";
+import { Search, X, Play, Tag, HelpCircle, ArrowRight, Pencil } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { renderFormattedText, stripFormatTags, isGreekText } from "../utils/textFormatter";
 
@@ -10,6 +10,7 @@ interface SearchModalProps {
   quotes: Quote[];
   categories: Category[];
   onPlaySearchResults: (results: Quote[], query: string) => void;
+  onNavigateToQuote: (quoteId: string, categoryId: string) => void;
 }
 
 export default function SearchModal({
@@ -18,12 +19,20 @@ export default function SearchModal({
   quotes,
   categories,
   onPlaySearchResults,
+  onNavigateToQuote,
 }: SearchModalProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [searchMode, setSearchMode] = useState<"exact" | "all" | "any">("exact");
   const [results, setResults] = useState<Quote[]>([]);
   const [hasSearched, setHasSearched] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  const [rightClickMenu, setRightClickMenu] = useState<{
+    x: number;
+    y: number;
+    visible: boolean;
+    quote: Quote;
+  } | null>(null);
 
   // Auto-focus search input when modal opens
   useEffect(() => {
@@ -32,13 +41,29 @@ export default function SearchModal({
         inputRef.current?.focus();
       }, 100);
     } else {
-      // Reset state on close
-      setSearchQuery("");
-      setSearchMode("exact");
-      setResults([]);
-      setHasSearched(false);
+      // Keep search state, only reset temporary UI menus
+      setRightClickMenu(null);
     }
   }, [isOpen]);
+
+  // Update search results if the parent quotes array changes or when the modal is opened,
+  // so any edited or deleted quotes are correctly updated.
+  useEffect(() => {
+    if (isOpen && hasSearched && searchQuery.trim()) {
+      performSearch(searchQuery, searchMode);
+    }
+  }, [isOpen, quotes]);
+
+  // Dismiss right click menu on click anywhere
+  useEffect(() => {
+    const handleGlobalClick = () => {
+      if (rightClickMenu?.visible) {
+        setRightClickMenu(null);
+      }
+    };
+    window.addEventListener("click", handleGlobalClick);
+    return () => window.removeEventListener("click", handleGlobalClick);
+  }, [rightClickMenu]);
 
   if (!isOpen) return null;
 
@@ -251,6 +276,9 @@ export default function SearchModal({
                 <div className="flex flex-wrap items-center justify-between gap-3 bg-stone-100 p-3 rounded-2xl border border-stone-200/50 sticky top-0 bg-white/95 backdrop-blur-md z-10 shadow-3xs">
                   <span className="text-xs font-semibold text-stone-600 pl-1">
                     Found <span className="font-bold text-stone-950 font-mono">{results.length}</span> matching {results.length === 1 ? "quote" : "quotes"}
+                    <span className="hidden sm:inline-block text-[10px] text-stone-400 font-normal ml-2 bg-stone-50 border border-stone-200 px-1.5 py-0.5 rounded-lg select-none">
+                      Right-click any quote to edit in Catalog
+                    </span>
                   </span>
                   <button
                     type="button"
@@ -268,7 +296,17 @@ export default function SearchModal({
                   {results.map((quote) => (
                     <div
                       key={quote.id}
-                      className="p-5 hover:bg-stone-50/50 transition-colors flex flex-col gap-2.5"
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        setRightClickMenu({
+                          x: e.clientX,
+                          y: e.clientY,
+                          visible: true,
+                          quote,
+                        });
+                      }}
+                      className="p-5 hover:bg-stone-50/50 transition-colors flex flex-col gap-2.5 cursor-context-menu"
+                      title="Right-click to edit in Quote Catalog"
                     >
                       <blockquote
                         className="font-quote text-sm leading-relaxed text-stone-850"
@@ -295,6 +333,31 @@ export default function SearchModal({
           </div>
         </motion.div>
       </div>
+
+      {/* Right-click custom context menu */}
+      {rightClickMenu?.visible && (
+        <div
+          className="fixed z-[100] bg-white border border-stone-250 shadow-lg rounded-xl py-1 w-44 font-sans text-xs flex flex-col select-none"
+          style={{
+            top: `${rightClickMenu.y}px`,
+            left: `${rightClickMenu.x}px`,
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            type="button"
+            onClick={() => {
+              onNavigateToQuote(rightClickMenu.quote.id, rightClickMenu.quote.categoryId);
+              setRightClickMenu(null);
+              onClose();
+            }}
+            className="px-3.5 py-2 hover:bg-amber-50 text-stone-700 hover:text-amber-900 font-semibold flex items-center gap-2 transition-colors text-left cursor-pointer"
+          >
+            <Pencil className="w-3.5 h-3.5 text-amber-600" />
+            <span>Edit in Catalog</span>
+          </button>
+        </div>
+      )}
     </AnimatePresence>
   );
 }
